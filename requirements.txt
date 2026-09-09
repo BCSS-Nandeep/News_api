@@ -1,0 +1,19 @@
+# Scraping (scraper/, processing/)
+feedparser>=6.0.11
+requests>=2.31
+beautifulsoup4>=4.12
+
+# API (api/, services/)
+# Minimum-pinned rather than exact-pinned: pydantic's compiled Rust core has
+# no prebuilt wheel for a new Python release the moment it ships, and an exact
+# old pin then forces a from-source build needing a Rust/MSVC toolchain.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+
+# Optional background cache pre-warmer (background_worker.py)
+schedule>=1.2
+
+# Tests (httpx is also a runtime dep of FastAPI's TestClient)
+pytest>=8.3
+httpx>=0.27

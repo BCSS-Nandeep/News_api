@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blura News API</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e2e5ea;
+    --text: #16181d;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --chip: #f1f3f7;
+    --ok: #16a34a;
+    --bad: #dc2626;
+    --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --border: #262b35;
+      --text: #e6e8ec;
+      --muted: #98a2b3;
+      --accent: #60a5fa;
+      --accent-soft: #16233b;
+      --chip: #1f242e;
+      --ok: #4ade80;
+      --bad: #f87171;
+      --shadow: none;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .health { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  .tabs { margin-left: auto; display: flex; gap: 4px; }
+  .tab {
+    padding: 6px 12px; border-radius: 7px; border: 1px solid transparent;
+    background: none; color: var(--muted); cursor: pointer; font: inherit; font-size: 13px;
+  }
+  .tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--border); font-weight: 600; }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 20px; }
+
+  .filters {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+  .grid {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+  label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+  input, select {
+    width: 100%; padding: 7px 9px; border-radius: 7px; font: inherit;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+  button.primary {
+    background: var(--accent); color: #fff; border: none; padding: 8px 18px;
+    border-radius: 7px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost {
+    background: none; color: var(--muted); border: 1px solid var(--border);
+    padding: 8px 14px; border-radius: 7px; font: inherit; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .status { font-size: 13px; color: var(--muted); margin: 0 2px 12px; min-height: 20px; }
+  .status b { color: var(--text); }
+
+  .note {
+    background: var(--accent-soft); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 16px;
+  }
+  .error {
+    background: color-mix(in srgb, var(--bad) 12%, transparent);
+    border: 1px solid var(--bad); color: var(--bad);
+    border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 13px;
+  }
+
+  .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; box-shadow: var(--shadow); display: flex; flex-direction: column;
+  }
+  .card img { width: 100%; height: 148px; object-fit: cover; background: var(--chip); display: block; }
+  .card-body { padding: 12px 13px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .card h3 { margin: 0; font-size: 14.5px; line-height: 1.35; font-weight: 640; }
+  .card h3 a { color: var(--text); text-decoration: none; }
+  .card h3 a:hover { color: var(--accent); text-decoration: underline; }
+  .summary {
+    color: var(--muted); font-size: 13px; margin: 0;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .body-text {
+    font-size: 13px; color: var(--text); margin: 0; white-space: pre-wrap;
+    max-height: 260px; overflow-y: auto; padding: 9px 10px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+  }
+  .toggle {
+    background: none; border: none; padding: 0; font: inherit; font-size: 12px;
+    color: var(--accent); cursor: pointer; text-align: left; font-weight: 600;
+  }
+  .toggle:hover { text-decoration: underline; }
+  .nobody { font-size: 12px; color: var(--muted); font-style: italic; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; padding-top: 4px; }
+  .chip {
+    background: var(--chip); border-radius: 20px; padding: 3px 9px;
+    font-size: 11.5px; color: var(--muted); white-space: nowrap;
+  }
+  .chip.src { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .card-foot {
+    border-top: 1px solid var(--border); padding: 8px 13px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11.5px; color: var(--muted); gap: 8px;
+  }
+  .card-foot code { font-size: 11px; cursor: pointer; }
+  .card-foot code:hover { color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { background: var(--chip); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  tbody tr:last-child td { border-bottom: none; }
+  td a { color: var(--accent); text-decoration: none; }
+
+  .pager { display: flex; justify-content: center; gap: 10px; align-items: center; margin: 20px 0 8px; }
+  .empty { text-align: center; color: var(--muted); padding: 50px 20px; }
+  .spinner {
+    width: 15px; height: 15px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    display: inline-block; vertical-align: -3px; animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Blura News API</h1>
+  <div class="health"><span class="dot" id="dot"></span><span id="healthText">checking…</span></div>
+  <div class="tabs">
+    <button class="tab active" data-view="articles">Articles</button>
+    <button class="tab" data-view="sources">Sources</button>
+  </div>
+</header>
+
+<main>
+  <div class="error" id="fileWarning" hidden>
+    <strong>This page was opened directly from disk (<code>file://</code>), so it can't reach the API.</strong><br><br>
+    Start the server:<br>
+    <code>.\.venv\Scripts\python.exe main.py</code><br><br>
+    then open <a href="http://localhost:8000">http://localhost:8000</a> instead of double-clicking this file.
+    The page has to be served <em>by</em> the API so they share an origin — a <code>file://</code> page is
+    blocked from calling <code>localhost</code> by the browser's security rules.
+  </div>
+
+  <!-- ARTICLES VIEW -->
+  <section id="articlesView">
+    <div class="filters">
+      <div class="grid">
+        <div><label for="keyword">Keyword</label><input id="keyword" placeholder="drugs, crime…"></div>
+        <div><label for="language">Language</label><select id="language"><option value="">Any</option></select></div>
+        <div><label for="state">State</label><select id="state"><option value="">Any</option></select></div>
+        <div><label for="location">Location</label><input id="location" placeholder="Hyderabad"></div>
+        <div><label for="district">District</label><input id="district" placeholder="Karimnagar"></div>
+        <div><label for="source">Source</label><select id="source"><option value="">Any</option></select></div>
+        <div><label for="limit">Limit</label>
+          <select id="limit"><option>10</option><option selected>20</option><option>50</option><option>100</option></select>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="searchBtn">Search</button>
+        <button class="ghost" id="clearBtn">Clear</button>
+      </div>
+    </div>
+
+    <div class="note">
+      First search for a set of sources scrapes them live and can take up to a minute.
+      Results are cached for 10 minutes, so repeat searches return instantly.
+    </div>
+
+    <div class="error" id="error" hidden></div>
+    <div class="status" id="status">Set your filters and hit Search.</div>
+    <div class="cards" id="cards"></div>
+    <div class="pager" id="pager" hidden>
+      <button class="ghost" id="prevBtn">← Previous</button>
+      <span id="pageInfo"></span>
+      <button class="ghost" id="nextBtn">Next →</button>
+    </div>
+  </section>
+
+  <!-- SOURCES VIEW -->
+  <section id="sourcesView" hidden>
+    <div class="filters">
+      <div class="grid">
+        <div><label for="srcState">State</label><select id="srcState"><option value="">Any</option></select></div>
+        <div><label for="srcLang">Language</label><select id="srcLang"><option value="">Any</option></select></div>
+      </div>
+      <div class="actions"><button class="primary" id="srcBtn">Filter</button></div>
+    </div>
+    <div class="status" id="srcStatus"></div>
+    <table id="srcTable">
+      <thead><tr><th>Name</th><th>ID</th><th>Language</th><th>State</th><th>Type</th><th>URL</th></tr></thead>
+      <tbody id="srcBody"></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+let allSources = [];
+let offset = 0, limit = 20, total = 0, lastFilters = {};
+
+const $ = id => document.getElementById(id);
+
+// Opened by double-clicking the file instead of visiting localhost:8000.
+// Every fetch below would resolve to file:///... and fail confusingly, so
+// bail out early with an explanation rather than showing "API offline".
+const OPENED_FROM_DISK = location.protocol === 'file:';
+if (OPENED_FROM_DISK) {
+  $('fileWarning').hidden = false;
+  $('dot').className = 'dot bad';
+  $('healthText').textContent = 'not served by API';
+  $('status').textContent = '';
+  $('searchBtn').disabled = true;
+}
+
+// ---- health ----
+if (!OPENED_FROM_DISK) fetch('/health').then(r => r.json()).then(d => {
+  $('dot').className = 'dot ' + (d.status === 'ok' ? 'ok' : 'bad');
+  $('healthText').textContent = d.status === 'ok' ? 'API online' : 'degraded';
+}).catch(() => {
+  $('dot').className = 'dot bad';
+  $('healthText').textContent = 'API offline — is main.py running?';
+});
+
+// ---- load registry into dropdowns ----
+if (!OPENED_FROM_DISK) fetch('/news/sources').then(r => r.json()).then(list => {
+  allSources = list;
+  const langs = [...new Set(list.map(s => s.language))].sort();
+  const states = [...new Set(list.map(s => s.state))].sort();
+  fill($('language'), langs); fill($('srcLang'), langs);
+  fill($('state'), states);   fill($('srcState'), states);
+  refreshSourceOptions();
+  $('srcStatus').textContent = list.length + ' active sources';
+  renderSources(list);
+});
+
+function fill(sel, values) {
+  values.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+}
+
+// Narrow the Source dropdown to whatever the state/language filters allow.
+function refreshSourceOptions() {
+  const st = $('state').value.toLowerCase(), lg = $('language').value.toLowerCase();
+  const matching = allSources.filter(s =>
+    (!st || s.state.toLowerCase().includes(st)) && (!lg || s.language.toLowerCase().includes(lg)));
+  const cur = $('source').value;
+  $('source').innerHTML = '<option value="">Any</option>';
+  matching.forEach(s => {
+    const o = document.createElement('option');
+    o.value = s.id; o.textContent = s.name;
+    $('source').appendChild(o);
+  });
+  if (matching.some(s => s.id === cur)) $('source').value = cur;
+}
+$('state').addEventListener('change', refreshSourceOptions);
+$('language').addEventListener('change', refreshSourceOptions);
+
+// ---- search ----
+function collectFilters() {
+  return {
+    keyword:  $('keyword').value.trim(),
+    language: $('language').value,
+    location: $('location').value.trim(),
+    state:    $('state').value,
+    district: $('district').value.trim(),
+    source:   $('source').value,
+  };
+}
+
+async function search(newOffset) {
+  offset = newOffset;
+  limit = parseInt($('limit').value, 10);
+  if (newOffset === 0) lastFilters = collectFilters();
+
+  const params = new URLSearchParams();
+  Object.entries(lastFilters).forEach(([k, v]) => { if (v) params.set(k, v); });
+  params.set('limit', limit);
+  params.set('offset', offset);
+
+  $('error').hidden = true;
+  $('cards').innerHTML = '';
+  $('pager').hidden = true;
+  $('searchBtn').disabled = true;
+
+  let secs = 0;
+  $('status').innerHTML = '<span class="spinner"></span> Scraping sources… <b>0s</b>';
+  const timer = setInterval(() => {
+    $('status').innerHTML = '<span class="spinner"></span> Scraping sources… <b>' + (++secs) + 's</b>';
+  }, 1000);
+
+  try {
+    const res = await fetch('/news/articles?' + params.toString());
+    const body = await res.json();
+    clearInterval(timer);
+    if (!res.ok) throw new Error(body.detail || ('HTTP ' + res.status));
+    total = body.count;
+    render(body, secs);
+  } catch (e) {
+    clearInterval(timer);
+    $('status').textContent = '';
+    $('error').hidden = false;
+    // "Failed to fetch" means the request never reached a server at all —
+    // almost always because main.py isn't running, not a bad filter.
+    $('error').innerHTML = /failed to fetch|networkerror/i.test(e.message)
+      ? '<strong>Could not reach the API.</strong> Is the server running? Start it with '
+        + '<code>.\\.venv\\Scripts\\python.exe main.py</code> and reload this page.'
+      : 'Request failed: ' + esc(e.message);
+  } finally {
+    $('searchBtn').disabled = false;
+  }
+}
+
+function render(body, secs) {
+  const arts = body.articles;
+  if (!arts.length) {
+    $('status').textContent = 'No articles matched these filters.';
+    $('cards').innerHTML = '<div class="empty">Nothing found — try widening the filters.</div>';
+    return;
+  }
+  const from = body.offset + 1, to = body.offset + arts.length;
+  $('status').innerHTML = 'Showing <b>' + from + '–' + to + '</b> of <b>' + body.count + '</b> articles &middot; ' + secs + 's';
+
+  $('cards').innerHTML = arts.map(a => {
+    const when = a.published_at ? new Date(a.published_at).toLocaleString() : '';
+    const chips = [
+      '<span class="chip src">' + esc(a.source) + '</span>',
+      '<span class="chip">' + esc(a.language) + '</span>',
+      a.state ? '<span class="chip">' + esc(a.state) + '</span>' : '',
+      a.district ? '<span class="chip">📍 ' + esc(a.district) + '</span>' : '',
+    ].join('');
+    const img = a.image_url
+      ? '<img src="' + esc(a.image_url) + '" alt="" loading="lazy" onerror="this.remove()">' : '';
+
+    // Show the scraped article body when we have it — that's the point of the
+    // service; summary alone is just the meta description.
+    let bodyBlock;
+    if (a.content && a.content.trim()) {
+      const words = a.content.trim().split(/\s+/).length;
+      bodyBlock =
+        (a.summary ? '<p class="summary">' + esc(a.summary) + '</p>' : '') +
+        '<button class="toggle" onclick="toggleBody(this)">▸ Read full article (' + words + ' words)</button>' +
+        '<p class="body-text" hidden>' + esc(a.content) + '</p>';
+    } else if (a.summary) {
+      bodyBlock = '<p class="summary">' + esc(a.summary) + '</p>' +
+                  '<span class="nobody">No body text could be extracted from this page.</span>';
+    } else {
+      bodyBlock = '<span class="nobody">No content extracted.</span>';
+    }
+
+    return '<article class="card">' + img +
+      '<div class="card-body">' +
+        '<h3><a href="' + esc(a.source_url) + '" target="_blank" rel="noopener">' + esc(a.title) + '</a></h3>' +
+        bodyBlock +
+        '<div class="chips">' + chips + '</div>' +
+      '</div>' +
+      '<div class="card-foot"><span>' + esc(when) + '</span>' +
+        '<code title="Click to copy article id" onclick="copyId(this,\'' + a.id + '\')">' + a.id + '</code>' +
+      '</div>' +
+    '</article>';
+  }).join('');
+
+  $('pager').hidden = false;
+  $('prevBtn').disabled = body.offset === 0;
+  $('nextBtn').disabled = to >= body.count;
+  $('pageInfo').textContent = 'Page ' + (Math.floor(body.offset / limit) + 1) + ' of ' + Math.max(1, Math.ceil(body.count / limit));
+}
+
+function toggleBody(btn) {
+  const body = btn.nextElementSibling;
+  body.hidden = !body.hidden;
+  btn.textContent = (body.hidden ? '▸ Read full article' : '▾ Hide article')
+    + btn.textContent.slice(btn.textContent.indexOf(' ('));
+}
+
+function copyId(el, id) {
+  navigator.clipboard.writeText(id);
+  const old = el.textContent;
+  el.textContent = 'copied!';
+  setTimeout(() => { el.textContent = old; }, 1000);
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+$('searchBtn').addEventListener('click', () => search(0));
+$('prevBtn').addEventListener('click', () => search(Math.max(0, offset - limit)));
+$('nextBtn').addEventListener('click', () => search(offset + limit));
+$('clearBtn').addEventListener('click', () => {
+  ['keyword', 'location', 'district'].forEach(id => $(id).value = '');
+  ['language', 'state', 'source'].forEach(id => $(id).value = '');
+  refreshSourceOptions();
+  $('cards').innerHTML = ''; $('pager').hidden = true;
+  $('status').textContent = 'Filters cleared.';
+});
+document.querySelectorAll('input').forEach(i =>
+  i.addEventListener('keydown', e => { if (e.key === 'Enter') search(0); }));
+
+// ---- sources view ----
+function renderSources(list) {
+  $('srcBody').innerHTML = list.map(s =>
+    '<tr><td>' + esc(s.name) + '</td><td><code>' + esc(s.id) + '</code></td><td>' + esc(s.language) +
+    '</td><td>' + esc(s.state) + '</td><td>' + esc(s.type) +
+    '</td><td><a href="' + esc(s.base_url) + '" target="_blank" rel="noopener">' + esc(s.base_url) + '</a></td></tr>'
+  ).join('');
+}
+$('srcBtn').addEventListener('click', async () => {
+  const p = new URLSearchParams();
+  if ($('srcState').value) p.set('state', $('srcState').value);
+  if ($('srcLang').value) p.set('language', $('srcLang').value);
+  const list = await (await fetch('/news/sources?' + p)).json();
+  $('srcStatus').textContent = list.length + ' sources';
+  renderSources(list);
+});
+
+document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  const isArticles = tab.dataset.view === 'articles';
+  $('articlesView').hidden = !isArticles;
+  $('sourcesView').hidden = isArticles;
+}));
+</script>
+</body>
+</html>
