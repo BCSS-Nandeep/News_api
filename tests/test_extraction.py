@@ -65,17 +65,52 @@ class TestDensestTextBlock:
         assert _densest_text_block(soup_of(html)) == ''
 
 
+# A paragraph long enough to read as an actual story rather than a nav label.
+# The fixtures below need one because _is_listing_page has two independent
+# signals — the WordPress body class AND whether the page contains any prose.
+PROSE = (
+    'Police said the seizure followed a month-long surveillance operation across '
+    'three districts, and that further arrests were expected in the coming days.'
+)
+
+
 class TestListingDetection:
     def test_wordpress_archive_page_is_a_listing(self):
-        s = soup_of('<body class="archive category category-crime"><p>x</p></body>')
+        s = soup_of(f'<body class="archive category category-crime"><p>{PROSE}</p></body>')
         assert _is_listing_page(s) is True
 
     def test_wordpress_single_post_is_not_a_listing(self):
-        s = soup_of('<body class="wp-singular post-template-default single single-post"><p>x</p></body>')
+        s = soup_of(
+            '<body class="wp-singular post-template-default single single-post">'
+            f'<p>{PROSE}</p></body>'
+        )
         assert _is_listing_page(s) is False
 
     def test_page_without_body_classes_is_not_a_listing(self):
-        assert _is_listing_page(soup_of('<body><p>x</p></body>')) is False
+        assert _is_listing_page(soup_of(f'<body><p>{PROSE}</p></body>')) is False
+
+    def test_page_with_no_paragraphs_at_all_is_a_listing(self):
+        """Xinhua's section fronts (english.news.cn/sports/index.htm) are pure
+        link walls with zero <p> tags and no WordPress classes — they used to
+        be served as articles titled 'Sports', 'Photos', 'Europe'."""
+        links = ''.join(f'<a href="/s{i}">Story {i}</a>' for i in range(50))
+        assert _is_listing_page(soup_of(f'<body><div>{links}</div></body>')) is True
+
+    def test_page_with_only_short_labels_is_a_listing(self):
+        s = soup_of('<body><p>Share</p><p>Copied</p><p>EXPLORE MORE</p></body>')
+        assert _is_listing_page(s) is True
+
+    def test_a_single_real_paragraph_is_enough_to_be_an_article(self):
+        """A photo-caption story is short but real — it must survive."""
+        s = soup_of(f'<body><p>{PROSE}</p></body>')
+        assert _is_listing_page(s) is False
+
+    def test_link_heavy_article_is_not_a_listing(self):
+        """Link count alone is a bad signal: a real article measured 272 links
+        while a section front measured 20. Prose is what decides."""
+        links = ''.join(f'<a href="/s{i}">More</a>' for i in range(200))
+        s = soup_of(f'<body><p>{PROSE}</p><div>{links}</div></body>')
+        assert _is_listing_page(s) is False
 
 
 class TestPublishedTime:

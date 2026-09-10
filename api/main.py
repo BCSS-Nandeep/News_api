@@ -17,7 +17,7 @@ _UI_FILE = Path(__file__).resolve().parent.parent / 'static' / 'index.html'
 
 app = FastAPI(
     title='Blura News API',
-    description='Discovers, scrapes and normalizes Indian news articles for SocEye.',
+    description='Discovers, scrapes and normalizes Indian and international news articles for SocEye.',
     version='1.0.0',
 )
 

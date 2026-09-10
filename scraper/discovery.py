@@ -222,9 +222,15 @@ def _resolve_sitemap(root: ET.Element, depth: int = 0) -> List[Dict]:
                 title = child.text.strip()
             elif tag in ('publication_date', 'lastmod') and child.text:
                 try:
-                    published_at = datetime.fromisoformat(child.text.strip().replace('Z', '+00:00'))
+                    parsed = datetime.fromisoformat(child.text.strip().replace('Z', '+00:00'))
                 except ValueError:
                     pass
+                else:
+                    # A <lastmod> is often just a date ("2026-09-10") or carries
+                    # no offset, which fromisoformat returns as NAIVE. RSS items
+                    # are always UTC-aware, so a response mixing a sitemap source
+                    # with an RSS one could not be sorted. Assume UTC here.
+                    published_at = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
         items.append({
             'url': url,

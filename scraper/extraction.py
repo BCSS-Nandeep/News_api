@@ -32,11 +32,26 @@ HEADERS = {
 
 _SKIP_PATTERNS = re.compile(
     r'/(tag|tags|category|categories|section|topic|author|page|feed|rss|'
-    r'search|trending|videos|gallery|live|breaking|sitemap|epaper|e-paper)(/|$)',
+    r'search|trending|videos|gallery|galleries|live|breaking|sitemap|epaper|e-paper|'
+    # Section fronts and topic hubs. `list`/`special` are how Xinhua and many
+    # Asian outlets name theirs (english.news.cn/list/World-americas.htm),
+    # which is how "South America" and "Sports" ended up served as articles.
+    r'list|lists|special|specials|archive|archives)(/|$)',
     re.IGNORECASE,
 )
 
+# A directory landing page: .../sports/index.htm, .../world/default.html
+_INDEX_FILENAME = re.compile(
+    r'^(index|default|home|main)\.(htm|html|shtml|php|asp|aspx|jsp)$', re.IGNORECASE,
+)
+_PAGE_EXTENSION = re.compile(r'\.(htm|html|shtml|php|asp|aspx|jsp)$', re.IGNORECASE)
+
 SKIP_DOMAINS = {'indianexpress.com', 'news.google.com'}
+
+# Shortest run of text still treated as an article body. Calibrated against
+# real pages: section fronts top out at 0-45 chars of prose, while the
+# shortest genuine stories (photo-caption pieces, wire briefs) run 120-180.
+_MIN_BODY_CHARS = 100
 DEFAULT_IMAGE_URL = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Flag_of_India.svg/320px-Flag_of_India.svg.png'
 
 
@@ -196,7 +211,16 @@ def _is_listing_page(soup) -> bool:
     body = soup.find('body')
     if not body:
         return False
-    return bool(_LISTING_BODY_CLASSES.intersection(body.get('class') or []))
+    if _LISTING_BODY_CLASSES.intersection(body.get('class') or []):
+        return True
+    # Most of the world's news sites aren't WordPress and advertise nothing
+    # about page type, so fall back to the thing that actually distinguishes a
+    # section front from a story: a story has at least one real paragraph.
+    # Xinhua's section pages carry literally zero <p> tags; the shortest real
+    # articles carry 120+ characters in one. Link counts are useless here —
+    # a section front had 20 links, a single article had 272.
+    longest = max((len(p.get_text(strip=True)) for p in body.find_all('p')), default=0)
+    return longest < _MIN_BODY_CHARS
 
 
 def _parse_published(soup) -> Optional[str]:
@@ -249,7 +273,48 @@ def _densest_text_block(soup) -> str:
         return ''
     best = max(buckets.values(), key=lambda texts: sum(len(t) for t in texts))
     content = '\n\n'.join(best)
-    return content if len(content) >= 200 else ''
+    if len(content) >= 200:
+        return content
+    # A one-paragraph story — a photo-caption piece, a wire brief — is still a
+    # story. Returning it beats reporting "no content extracted"; the floor
+    # stays high enough that a stray nav label never qualifies.
+    return content if len(content) >= _MIN_BODY_CHARS else ''
+
+
+def _iter_jsonld_nodes(data):
+    """Walk a JSON-LD payload, which may be a single node, a list, or an
+    @graph wrapper."""
+    if isinstance(data, dict):
+        for node in data.get('@graph') or []:
+            yield from _iter_jsonld_nodes(node)
+        yield data
+    elif isinstance(data, list):
+        for node in data:
+            yield from _iter_jsonld_nodes(node)
+
+
+def _jsonld_body(soup) -> str:
+    """schema.org NewsArticle.articleBody, when the page publishes one.
+
+    Structured, CMS-independent and often present precisely when the visible
+    markup is unrecognisable, so it's a better fallback than guessing at the
+    densest block of <p> tags.
+    """
+    for tag in soup.find_all('script', type='application/ld+json'):
+        raw = tag.string or tag.get_text() or ''
+        if 'articleBody' not in raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue
+        for node in _iter_jsonld_nodes(data):
+            if not isinstance(node, dict):
+                continue
+            body = node.get('articleBody')
+            if isinstance(body, str) and len(body.strip()) >= _MIN_BODY_CHARS:
+                return re.sub(r'\n{3,}', '\n\n', body.strip())
+    return ''
 
 
 def fetch_article_page(url: str) -> dict:
@@ -320,6 +385,8 @@ def fetch_article_page(url: str) -> dict:
                 if len(content) > 200:
                     break
 
+        if len(content) < 200:
+            content = _jsonld_body(soup) or content
         if len(content) < 200:
             content = _densest_text_block(soup) or content
 
@@ -393,6 +460,18 @@ def resolve_google_news_url(url: str) -> str:
 
 # ── URL validation ────────────────────────────────────────────────────────────
 
+def _looks_like_article_slug(segment: str) -> bool:
+    """Does this path segment read like a headline slug or an article id?
+
+    Same test the single-segment rule below applies: several hyphens, or a
+    digit, and long enough to be more than a section name.
+    """
+    stem = _PAGE_EXTENSION.sub('', segment or '')
+    if len(stem) < 8:
+        return False
+    return stem.count('-') >= 2 or bool(re.search(r'\d', stem))
+
+
 def is_article_url(url: str) -> bool:
     if not url:
         return False
@@ -409,6 +488,14 @@ def is_article_url(url: str) -> bool:
         return False
 
     last = segments[-1]
+
+    # .../northamerica/index.htm is a section front, not a story. Judge it by
+    # the directory it indexes: a real article id still qualifies
+    # (news.cgtn.com/news/2026-09-09/VHJhbnNjcmlwdDkyMzM4/index.html), while a
+    # plain word like "sports", "photo" or "silkroad" does not.
+    if _INDEX_FILENAME.match(last):
+        return _looks_like_article_slug(segments[-2]) if len(segments) >= 2 else False
+
     if len(last) < 8 and not re.search(r'\d', last):
         return False
 

@@ -80,6 +80,51 @@
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
   }
   input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .hint { font-size: 10.5px; color: var(--muted); margin-top: 3px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+  /* Checkbox dropdown — a real popover with tickboxes. A native
+     <select multiple> can't show checkboxes and renders as a cramped
+     scrolling listbox, which is why these are built by hand. */
+  .ms { position: relative; }
+  .ms-btn {
+    width: 100%; padding: 7px 24px 7px 9px; border-radius: 7px; font: inherit;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ms-btn::after {
+    content: ''; position: absolute; right: 9px; top: 50%; margin-top: -2px;
+    pointer-events: none; width: 0; height: 0;
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 5px solid var(--muted);
+  }
+  .ms.open .ms-btn { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .ms-btn.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .ms-panel {
+    position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
+    min-width: 100%; width: max-content; max-width: 330px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+    box-shadow: 0 8px 28px rgba(16,24,40,.18);
+    padding: 8px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .ms-search { padding: 6px 8px; font-size: 13px; }
+  .ms-tools { display: flex; gap: 6px; align-items: center; }
+  .ms-tools button {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 11.5px; cursor: pointer;
+  }
+  .ms-tools button:hover { color: var(--accent); border-color: var(--accent); }
+  .ms-count { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .ms-list { max-height: 250px; overflow-y: auto; }
+  .ms-item {
+    display: flex; align-items: center; gap: 8px; padding: 5px 7px; margin: 0;
+    border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text);
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+  }
+  .ms-item:hover { background: var(--chip); }
+  .ms-item input { width: auto; flex: none; margin: 0; accent-color: var(--accent); }
+  .ms-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ms-empty { padding: 10px 7px; font-size: 12.5px; color: var(--muted); font-style: italic; }
   .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
   button.primary {
     background: var(--accent); color: #fff; border: none; padding: 8px 18px;
@@ -186,11 +231,18 @@
     <div class="filters">
       <div class="grid">
         <div><label for="keyword">Keyword</label><input id="keyword" placeholder="drugs, crime…"></div>
-        <div><label for="language">Language</label><select id="language"><option value="">Any</option></select></div>
-        <div><label for="state">State</label><select id="state"><option value="">Any</option></select></div>
-        <div><label for="location">Location</label><input id="location" placeholder="Hyderabad"></div>
-        <div><label for="district">District</label><input id="district" placeholder="Karimnagar"></div>
-        <div><label for="source">Source</label><select id="source"><option value="">Any</option></select></div>
+        <div><label>Country</label><div id="country"></div>
+          <div class="hint">Tick any number; none = all</div></div>
+        <div><label>Language</label><div id="language"></div>
+          <div class="hint">Tick any number; none = all</div></div>
+        <div><label>State</label><div id="state"></div>
+          <div class="hint">Tick any number; none = all</div></div>
+        <div><label for="location">Location</label><input id="location" placeholder="Hyderabad, New York">
+          <div class="hint">Comma-separated</div></div>
+        <div><label for="district">District</label><input id="district" placeholder="Hyderabad, Karimnagar">
+          <div class="hint">Comma-separated</div></div>
+        <div><label>Website</label><div id="source"></div>
+          <div class="hint">Narrows to the filters above</div></div>
         <div><label for="limit">Limit</label>
           <select id="limit"><option>10</option><option selected>20</option><option>50</option><option>100</option></select>
         </div>
@@ -220,14 +272,18 @@
   <section id="sourcesView" hidden>
     <div class="filters">
       <div class="grid">
-        <div><label for="srcState">State</label><select id="srcState"><option value="">Any</option></select></div>
-        <div><label for="srcLang">Language</label><select id="srcLang"><option value="">Any</option></select></div>
+        <div><label>Country</label><div id="srcCountry"></div>
+          <div class="hint">Tick any number; none = all</div></div>
+        <div><label>State</label><div id="srcState"></div>
+          <div class="hint">Tick any number; none = all</div></div>
+        <div><label>Language</label><div id="srcLang"></div>
+          <div class="hint">Tick any number; none = all</div></div>
       </div>
       <div class="actions"><button class="primary" id="srcBtn">Filter</button></div>
     </div>
     <div class="status" id="srcStatus"></div>
     <table id="srcTable">
-      <thead><tr><th>Name</th><th>ID</th><th>Language</th><th>State</th><th>Type</th><th>URL</th></tr></thead>
+      <thead><tr><th>Name</th><th>ID</th><th>Country</th><th>Language</th><th>State</th><th>Type</th><th>URL</th></tr></thead>
       <tbody id="srcBody"></tbody>
     </table>
   </section>
@@ -260,48 +316,176 @@ if (!OPENED_FROM_DISK) fetch('/health').then(r => r.json()).then(d => {
   $('healthText').textContent = 'API offline — is main.py running?';
 });
 
+// ---- checkbox dropdown component ----
+// Registry of live controls, keyed by the element id they replaced, so
+// picked('country') keeps working exactly as it did with <select multiple>.
+const MULTI = {};
+
+function multiSelect(id, placeholder, onChange) {
+  const host = $(id);
+  host.className = 'ms';
+  host.innerHTML =
+    '<button type="button" class="ms-btn"></button>' +
+    '<div class="ms-panel" hidden>' +
+      '<input class="ms-search" type="text" placeholder="Search\u2026" autocomplete="off">' +
+      '<div class="ms-tools">' +
+        '<button type="button" data-act="all">Select all</button>' +
+        '<button type="button" data-act="none">Clear</button>' +
+        '<span class="ms-count"></span>' +
+      '</div>' +
+      '<div class="ms-list"></div>' +
+    '</div>';
+
+  const btn = host.querySelector('.ms-btn');
+  const panel = host.querySelector('.ms-panel');
+  const search = host.querySelector('.ms-search');
+  const list = host.querySelector('.ms-list');
+  const count = host.querySelector('.ms-count');
+
+  let items = [];            // [{ value, label }]
+  const chosen = new Set();
+
+  // Which items the search box is currently showing — "Select all" applies to
+  // these, so you can tick every European country without ticking all 53.
+  function visible() {
+    const q = search.value.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(i =>
+      i.label.toLowerCase().includes(q) || i.value.toLowerCase().includes(q));
+  }
+
+  function paintButton() {
+    const names = items.filter(i => chosen.has(i.value)).map(i => i.label);
+    btn.textContent = !names.length ? placeholder
+      : names.length <= 2 ? names.join(', ')
+      : names.length + ' selected';
+    btn.classList.toggle('on', chosen.size > 0);
+    count.textContent = chosen.size + ' / ' + items.length;
+  }
+
+  function paintList() {
+    const shown = visible();
+    list.innerHTML = shown.length
+      ? shown.map(i =>
+          '<label class="ms-item"><input type="checkbox" value="' + esc(i.value) + '"' +
+          (chosen.has(i.value) ? ' checked' : '') +
+          '><span>' + esc(i.label) + '</span></label>').join('')
+      : '<div class="ms-empty">No matches</div>';
+  }
+
+  function fire() {
+    paintButton();
+    if (onChange) onChange();
+  }
+
+  list.addEventListener('change', e => {
+    const box = e.target;
+    if (!box.matches('input[type=checkbox]')) return;
+    if (box.checked) chosen.add(box.value); else chosen.delete(box.value);
+    fire();
+  });
+
+  search.addEventListener('input', paintList);
+  // Enter inside the dropdown filters the list; it must not submit a search.
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+
+  host.querySelector('[data-act=all]').addEventListener('click', () => {
+    visible().forEach(i => chosen.add(i.value));
+    paintList(); fire();
+  });
+  host.querySelector('[data-act=none]').addEventListener('click', () => {
+    visible().forEach(i => chosen.delete(i.value));
+    paintList(); fire();
+  });
+
+  function open() {
+    document.querySelectorAll('.ms.open').forEach(el => {
+      if (el !== host) { el.classList.remove('open'); el.querySelector('.ms-panel').hidden = true; }
+    });
+    host.classList.add('open');
+    panel.hidden = false;
+    paintList();
+    search.focus();
+  }
+  function close() { host.classList.remove('open'); panel.hidden = true; }
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    panel.hidden ? open() : close();
+  });
+  panel.addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', close);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+  const api = {
+    // Replacing the item list drops any selection that is no longer offered —
+    // that is what keeps the Website picker honest when Country changes.
+    setItems(next) {
+      items = next;
+      const allowed = new Set(next.map(i => i.value));
+      [...chosen].forEach(v => { if (!allowed.has(v)) chosen.delete(v); });
+      paintList(); paintButton();
+    },
+    selected() { return items.filter(i => chosen.has(i.value)).map(i => i.value); },
+    clear() { chosen.clear(); paintList(); paintButton(); },
+  };
+  MULTI[id] = api;
+  return api;
+}
+
+multiSelect('country', 'All countries', refreshSourceOptions);
+multiSelect('language', 'All languages', refreshSourceOptions);
+multiSelect('state', 'All states', refreshSourceOptions);
+multiSelect('source', 'All websites');
+multiSelect('srcCountry', 'All countries');
+multiSelect('srcState', 'All states');
+multiSelect('srcLang', 'All languages');
+
 // ---- load registry into dropdowns ----
 if (!OPENED_FROM_DISK) fetch('/news/sources').then(r => r.json()).then(list => {
   allSources = list;
-  const langs = [...new Set(list.map(s => s.language))].sort();
-  const states = [...new Set(list.map(s => s.state))].sort();
-  fill($('language'), langs); fill($('srcLang'), langs);
-  fill($('state'), states);   fill($('srcState'), states);
+  // Every multi-select list is derived from the registry response — nothing
+  // about countries, languages or states is hardcoded in this page.
+  const uniq = key =>
+    [...new Set(list.map(s => s[key]).filter(Boolean))].sort()
+      .map(v => ({ value: v, label: v }));
+  const langs = uniq('language'), states = uniq('state'), countries = uniq('country');
+  MULTI.language.setItems(langs);      MULTI.srcLang.setItems(langs);
+  MULTI.state.setItems(states);        MULTI.srcState.setItems(states);
+  MULTI.country.setItems(countries);   MULTI.srcCountry.setItems(countries);
   refreshSourceOptions();
   $('srcStatus').textContent = list.length + ' active sources';
   renderSources(list);
 });
 
-function fill(sel, values) {
-  values.forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o); });
+// Ticked values of a filter. Nothing ticked means "no filter", not
+// "match nothing" — the same rule the API applies to an omitted param.
+function picked(id) {
+  return MULTI[id].selected();
 }
 
-// Narrow the Source dropdown to whatever the state/language filters allow.
+// Narrow the Website list to whatever the country/state/language selections
+// allow, using the API's own semantics: OR within a filter, AND across them.
 function refreshSourceOptions() {
-  const st = $('state').value.toLowerCase(), lg = $('language').value.toLowerCase();
+  const hits = (value, picks) =>
+    !picks.length || picks.some(p => (value || '').toLowerCase().includes(p.toLowerCase()));
+  const co = picked('country'), st = picked('state'), lg = picked('language');
   const matching = allSources.filter(s =>
-    (!st || s.state.toLowerCase().includes(st)) && (!lg || s.language.toLowerCase().includes(lg)));
-  const cur = $('source').value;
-  $('source').innerHTML = '<option value="">Any</option>';
-  matching.forEach(s => {
-    const o = document.createElement('option');
-    o.value = s.id; o.textContent = s.name;
-    $('source').appendChild(o);
-  });
-  if (matching.some(s => s.id === cur)) $('source').value = cur;
+    hits(s.country, co) && hits(s.state, st) && hits(s.language, lg));
+
+  MULTI.source.setItems(matching.map(s => ({ value: s.id, label: s.name })));
 }
-$('state').addEventListener('change', refreshSourceOptions);
-$('language').addEventListener('change', refreshSourceOptions);
 
 // ---- search ----
 function collectFilters() {
   return {
     keyword:  $('keyword').value.trim(),
-    language: $('language').value,
+    country:  picked('country').join(','),
+    language: picked('language').join(','),
     location: $('location').value.trim(),
-    state:    $('state').value,
+    state:    picked('state').join(','),
     district: $('district').value.trim(),
-    source:   $('source').value,
+    source:   picked('source').join(','),
   };
 }
 
@@ -363,6 +547,7 @@ function render(body, secs) {
     const chips = [
       '<span class="chip src">' + esc(a.source) + '</span>',
       '<span class="chip">' + esc(a.language) + '</span>',
+      a.country ? '<span class="chip">' + esc(a.country) + '</span>' : '',
       a.state ? '<span class="chip">' + esc(a.state) + '</span>' : '',
       a.district ? '<span class="chip">📍 ' + esc(a.district) + '</span>' : '',
     ].join('');
@@ -427,26 +612,30 @@ $('prevBtn').addEventListener('click', () => search(Math.max(0, offset - limit))
 $('nextBtn').addEventListener('click', () => search(offset + limit));
 $('clearBtn').addEventListener('click', () => {
   ['keyword', 'location', 'district'].forEach(id => $(id).value = '');
-  ['language', 'state', 'source'].forEach(id => $(id).value = '');
+  ['country', 'language', 'state', 'source'].forEach(id => MULTI[id].clear());
   refreshSourceOptions();
   $('cards').innerHTML = ''; $('pager').hidden = true;
   $('status').textContent = 'Filters cleared.';
 });
-document.querySelectorAll('input').forEach(i =>
-  i.addEventListener('keydown', e => { if (e.key === 'Enter') search(0); }));
+// Scoped to the free-text filters only — an Enter inside a dropdown's search
+// box filters that list instead of submitting the whole query.
+['keyword', 'location', 'district'].forEach(id =>
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') search(0); }));
 
 // ---- sources view ----
 function renderSources(list) {
   $('srcBody').innerHTML = list.map(s =>
-    '<tr><td>' + esc(s.name) + '</td><td><code>' + esc(s.id) + '</code></td><td>' + esc(s.language) +
-    '</td><td>' + esc(s.state) + '</td><td>' + esc(s.type) +
+    '<tr><td>' + esc(s.name) + '</td><td><code>' + esc(s.id) + '</code></td><td>' + esc(s.country) +
+    '</td><td>' + esc(s.language) + '</td><td>' + esc(s.state) + '</td><td>' + esc(s.type) +
     '</td><td><a href="' + esc(s.base_url) + '" target="_blank" rel="noopener">' + esc(s.base_url) + '</a></td></tr>'
   ).join('');
 }
 $('srcBtn').addEventListener('click', async () => {
   const p = new URLSearchParams();
-  if ($('srcState').value) p.set('state', $('srcState').value);
-  if ($('srcLang').value) p.set('language', $('srcLang').value);
+  const set = (key, id) => { const v = picked(id).join(','); if (v) p.set(key, v); };
+  set('country', 'srcCountry');
+  set('state', 'srcState');
+  set('language', 'srcLang');
   const list = await (await fetch('/news/sources?' + p)).json();
   $('srcStatus').textContent = list.length + ' sources';
   renderSources(list);

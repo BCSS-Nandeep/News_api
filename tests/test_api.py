@@ -27,6 +27,7 @@ SAMPLE_ARTICLE = {
     'source_id': 'test_telangana_telugu',
     'source_url': 'https://example-telangana.test/article-1',
     'language': 'Telugu',
+    'country': 'India',
     'state': 'Telangana',
     'district': 'Hyderabad',
     'location': 'Hyderabad',

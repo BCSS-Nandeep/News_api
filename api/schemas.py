@@ -18,6 +18,7 @@ class ArticleOut(BaseModel):
     source_id: str
     source_url: str
     language: str
+    country: str
     state: str
     district: str
     location: str
@@ -36,6 +37,7 @@ class SourceOut(BaseModel):
     id: str
     name: str
     region: str
+    country: str
     state: str
     language: str
     type: str
