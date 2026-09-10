@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence
 
 from scraper import discovery
-from scraper.extraction import fetch_article_page
+from scraper.extraction import fetch_article_page, prefer_https
 from scraper.normalize import make_article_id, dedupe_by_id
 from scraper.sources_registry import (
     FilterValue,
@@ -82,7 +82,10 @@ def _normalize_article(item: Dict, source: Source) -> Optional[Dict]:
     # No stand-in image. The old fallback was an Indian flag, which is simply
     # wrong on a story from Tokyo or Lagos; an empty value lets the client
     # lay the card out without one.
-    image_url = item.get('image_url') or page.get('image') or ''
+    # Normalized here rather than in either producer, so the feed's image and
+    # the scraped page's image both reach the client over https — see
+    # prefer_https() for why an http:// image is useless to a TLS-served client.
+    image_url = prefer_https(item.get('image_url') or page.get('image') or '')
     # Prefer the feed's date, then the page's own published_time. Falling
     # straight through to now() would stamp every article with today.
     published_at = (

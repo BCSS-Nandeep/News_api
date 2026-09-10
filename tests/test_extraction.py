@@ -10,6 +10,7 @@ from scraper.extraction import (
     _parse_published,
     _strip_noise,
     is_article_url,
+    prefer_https,
 )
 
 PARA = 'This is a genuine paragraph of article body text long enough to count as real content. '
@@ -149,3 +150,97 @@ class TestIsArticleUrl:
         assert is_article_url('https://x.com/about-us') is False
         assert is_article_url('https://x.com/contact') is False
         assert is_article_url('https://www.siasat.com/crime/') is False
+
+
+class _FakeResponse:
+    """Minimal stand-in for requests.Response — enough for fetch_article_page."""
+
+    status_code = 200
+    apparent_encoding = 'utf-8'
+
+    def __init__(self, text, url):
+        self.text = text
+        self.url = url
+
+
+class TestArticleImageResolution:
+    """Regression: images referenced by a relative path were dropped entirely.
+
+    fetch_article_page() gated every candidate on src.startswith('http'), so a
+    CMS that emits "sites/default/files/..." (Drupal) or "/media/x.jpg" yielded
+    image=None even when the article clearly had a lead image. Found on
+    flanderstoday.eu, which serves relative paths AND has no og:image.
+    """
+
+    URL = 'https://example-news.test/some-article'
+
+    def _fetch(self, monkeypatch, html):
+        from scraper import extraction
+        monkeypatch.setattr(
+            extraction.requests, 'get',
+            lambda *a, **kw: _FakeResponse(html, self.URL),
+        )
+        return extraction.fetch_article_page(self.URL)
+
+    def test_resolves_a_relative_img_src_against_the_article_url(self, monkeypatch):
+        html = ('<html><body><article>'
+                '<img src="sites/default/files/webimages/babies.jpg" width="800">'
+                + ''.join(f'<p>{PARA}</p>' for _ in range(4)) +
+                '</article></body></html>')
+        page = self._fetch(monkeypatch, html)
+        assert page['image'] == 'https://example-news.test/sites/default/files/webimages/babies.jpg'
+
+    def test_resolves_a_root_relative_img_src(self, monkeypatch):
+        html = ('<html><body><article>'
+                '<img src="/media/lead.jpg" width="600">'
+                + ''.join(f'<p>{PARA}</p>' for _ in range(4)) +
+                '</article></body></html>')
+        page = self._fetch(monkeypatch, html)
+        assert page['image'] == 'https://example-news.test/media/lead.jpg'
+
+    def test_resolves_a_relative_og_image(self, monkeypatch):
+        html = ('<html><head><meta property="og:image" content="/img/social.jpg">'
+                '</head><body><article>'
+                + ''.join(f'<p>{PARA}</p>' for _ in range(4)) +
+                '</article></body></html>')
+        page = self._fetch(monkeypatch, html)
+        assert page['image'] == 'https://example-news.test/img/social.jpg'
+
+    def test_leaves_an_absolute_url_untouched(self, monkeypatch):
+        html = ('<html><head><meta property="og:image" content="https://cdn.other.test/a.jpg">'
+                '</head><body><article>'
+                + ''.join(f'<p>{PARA}</p>' for _ in range(4)) +
+                '</article></body></html>')
+        page = self._fetch(monkeypatch, html)
+        assert page['image'] == 'https://cdn.other.test/a.jpg'
+
+    def test_still_rejects_a_data_uri_placeholder(self, monkeypatch):
+        """urljoin leaves data: URIs alone, so the http check must still drop
+        them — otherwise a lazy-loading placeholder becomes the lead image."""
+        html = ('<html><body><article>'
+                '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="800">'
+                + ''.join(f'<p>{PARA}</p>' for _ in range(4)) +
+                '</article></body></html>')
+        page = self._fetch(monkeypatch, html)
+        assert page['image'] is None
+
+
+class TestPreferHttps:
+    """An http:// image is blocked as mixed content on any https-served page,
+    and index.html's onerror handler then removes the <img> silently — so the
+    image looks missing again with nothing to explain it."""
+
+    def test_upgrades_http_to_https(self):
+        assert prefer_https('http://site.test/a.jpg') == 'https://site.test/a.jpg'
+
+    def test_leaves_https_untouched(self):
+        assert prefer_https('https://site.test/a.jpg') == 'https://site.test/a.jpg'
+
+    def test_leaves_empty_untouched(self):
+        assert prefer_https('') == ''
+
+    def test_does_not_touch_a_host_containing_http_in_its_path(self):
+        """Only the scheme is rewritten — a path segment that happens to read
+        'http://' must survive intact."""
+        url = 'https://site.test/redirect?to=http://other.test/a.jpg'
+        assert prefer_https(url) == url

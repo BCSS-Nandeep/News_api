@@ -9,7 +9,7 @@ discovery layer (scraper/discovery.py) and the article normalizer
 
 import re
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from typing import Optional
 
 import json
@@ -73,6 +73,24 @@ def detect_language(text: str) -> str:
 
 
 # ── Image extraction ──────────────────────────────────────────────────────────
+
+def prefer_https(url: str) -> str:
+    """Upgrade an image URL to https.
+
+    A browser on an https page blocks an http:// image outright as mixed
+    content, so such a URL is unusable to any client served over TLS — and the
+    dashboard's onerror handler then drops the <img> with nothing to explain
+    why. Plenty of feeds still emit http:// links even though the host serves
+    the same bytes over TLS (flanderstoday.eu does).
+
+    Upgrading is safe: a host without working https would have had its image
+    blocked on any https deployment regardless, so this never loses an image
+    that would otherwise have rendered there.
+    """
+    if url and url.startswith('http://'):
+        return 'https://' + url[len('http://'):]
+    return url
+
 
 def extract_image(entry) -> Optional[str]:
     """Try every known RSS/Atom image field in priority order."""
@@ -349,9 +367,18 @@ def fetch_article_page(url: str) -> dict:
             or meta('twitter:image', 'twitter:image')
             or meta('twitter:image:src', 'twitter:image:src')
         )
+        # Resolve against the article's own URL: plenty of CMSes emit relative
+        # image paths ("sites/default/files/...", "/media/x.jpg"). Without this
+        # every one of them fails the startswith('http') test below and the
+        # article comes back with no image at all. urljoin leaves an already
+        # absolute URL untouched, and leaves data:/mailto: alone so the same
+        # test still rejects them.
+        if image:
+            image = urljoin(resp.url, image)
+
         if not image:
             for img in soup.find_all('img', src=True):
-                src = img['src']
+                src = urljoin(resp.url, img['src'])
                 if src.startswith('http') and not src.endswith('.gif'):
                     try:
                         if int(str(img.get('width', '0')).replace('px', '') or 0) >= 200:
