@@ -18,12 +18,12 @@ from fastapi import APIRouter, HTTPException, Query
 from api.schemas import ArticleListResponse, ArticleOut
 from services import news_service
 
-router = APIRouter()
+router = APIRouter(tags=['Articles'])
 
 _MULTI = 'Comma-separated for multi-select; values are ORed together.'
 
 
-@router.get('/news/articles', response_model=ArticleListResponse)
+@router.get('/news/articles', response_model=ArticleListResponse, summary='Search articles')
 def get_articles(
     keyword: Optional[str] = Query(None, description="e.g. 'drugs', 'corruption', 'accident'"),
     country: Optional[str] = Query(None, description=f"e.g. 'India,United States'. {_MULTI}"),
@@ -35,6 +35,8 @@ def get_articles(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> dict:
+    """Filtered, paginated articles. Values within one filter are ORed,
+    different filters are ANDed. Sources are scraped lazily and cached."""
     return news_service.get_articles(
         keyword=keyword,
         country=country,
@@ -48,7 +50,7 @@ def get_articles(
     )
 
 
-@router.get('/news/articles/{article_id}', response_model=ArticleOut)
+@router.get('/news/articles/{article_id}', response_model=ArticleOut, summary='Get article by id')
 def get_article(article_id: str) -> dict:
     """Only finds articles currently in the warm in-memory cache (no
     persistent DB backs this API) — request /news/articles with matching

@@ -11,12 +11,12 @@ from fastapi import APIRouter, Query
 from api.schemas import SourceOut
 from scraper.sources_registry import list_active_sources
 
-router = APIRouter()
+router = APIRouter(tags=['Sources'])
 
 _MULTI = 'Comma-separated for multi-select; values are ORed together.'
 
 
-@router.get('/news/sources', response_model=List[SourceOut])
+@router.get('/news/sources', response_model=List[SourceOut], summary='List news sources')
 def get_sources(
     country: Optional[str] = Query(None, description=f"e.g. 'India,United States'. {_MULTI}"),
     state: Optional[str] = Query(None, description=f"e.g. 'Telangana,Tamil Nadu'. {_MULTI}"),

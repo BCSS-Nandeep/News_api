@@ -49,6 +49,21 @@ def test_ui_page_is_served_at_root():
     assert '<title>Blura News API</title>' in resp.text
 
 
+def test_api_reference_page_is_served():
+    resp = client.get('/reference')
+    assert resp.status_code == 200
+    assert 'text/html' in resp.headers['content-type']
+    assert "url: '/openapi.json'" in resp.text
+
+
+def test_openapi_groups_routes_by_tag():
+    paths = client.get('/openapi.json').json()['paths']
+    assert paths['/health']['get']['tags'] == ['Health']
+    assert paths['/news/sources']['get']['tags'] == ['Sources']
+    assert paths['/news/articles']['get']['tags'] == ['Articles']
+    assert paths['/news/articles/{article_id}']['get']['tags'] == ['Articles']
+
+
 def test_sources_endpoint(fixture_registry):
     resp = client.get('/news/sources')
     assert resp.status_code == 200

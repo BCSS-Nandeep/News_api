@@ -13,12 +13,23 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from api.routes import articles, health, sources
 
-_UI_FILE = Path(__file__).resolve().parent.parent / 'static' / 'index.html'
+_STATIC_DIR = Path(__file__).resolve().parent.parent / 'static'
+_UI_FILE = _STATIC_DIR / 'index.html'
+_REFERENCE_FILE = _STATIC_DIR / 'reference.html'
 
 app = FastAPI(
     title='Blura News API',
-    description='Discovers, scrapes and normalizes Indian and international news articles for SocEye.',
+    description=(
+        'Discovers, scrapes and normalizes Indian and international news articles for SocEye.\n\n'
+        'Multi-select filters take comma-separated values: values within one filter are ORed, '
+        'different filters are ANDed.'
+    ),
     version='1.0.0',
+    openapi_tags=[
+        {'name': 'Health', 'description': 'Service liveness.'},
+        {'name': 'Sources', 'description': 'The news source registry (built from News_URLs.json).'},
+        {'name': 'Articles', 'description': 'Scraped, normalized articles with keyword/location/language filters.'},
+    ],
 )
 
 app.include_router(health.router)
@@ -32,6 +43,13 @@ def ui() -> FileResponse:
     local file so it shares an origin with the endpoints it calls — a file://
     page would be blocked by CORS on every request."""
     return FileResponse(_UI_FILE)
+
+
+@app.get('/reference', include_in_schema=False)
+def api_reference() -> FileResponse:
+    """Interactive API docs + request playground (Scalar), rendered from
+    /openapi.json. Swagger UI remains at /docs."""
+    return FileResponse(_REFERENCE_FILE)
 
 
 @app.exception_handler(Exception)
