@@ -105,6 +105,9 @@ CACHE_TTL_SECONDS=600
 MAX_SOURCES_PER_REQUEST=40
 # Sources scraped in parallel.
 DISCOVERY_MAX_WORKERS=10
+# Max seconds a request waits for scraping; slower sources finish in the
+# background. Keep it under the gateway timeout in front of the API (BluGate: 30).
+REQUEST_TIME_BUDGET_SECONDS=25
 EOF
   chmod 644 "$ENV_FILE"
 else

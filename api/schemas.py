@@ -6,7 +6,7 @@ sentiment/political-scoring fields anywhere.
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ArticleOut(BaseModel):
@@ -31,6 +31,13 @@ class ArticleListResponse(BaseModel):
     limit: int
     offset: int
     articles: List[ArticleOut]
+    pending_sources: int = Field(
+        0,
+        description=(
+            'Matching sources still being scraped when the response was sent. '
+            'They finish in the background; repeat the request shortly to include them.'
+        ),
+    )
 
 
 class SourceOut(BaseModel):

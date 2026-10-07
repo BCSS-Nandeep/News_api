@@ -11,9 +11,10 @@ so a request for `country=Japan` never touches the Indian sources.
 """
 
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from scraper import discovery
 from scraper.extraction import fetch_article_page, prefer_https
@@ -31,6 +32,20 @@ from services import cache
 
 _MAX_SOURCES_PER_REQUEST = int(os.getenv('MAX_SOURCES_PER_REQUEST', '40'))
 _MAX_WORKERS = int(os.getenv('DISCOVERY_MAX_WORKERS', '10'))
+# A cold source takes ~15 s to scrape, so a cold request can run 60-90 s — but
+# gateways in front of this API (BluGate) cut requests off at 30 s. Answering
+# within this budget with the sources that are ready beats a timeout with none.
+_TIME_BUDGET_SECONDS = float(os.getenv('REQUEST_TIME_BUDGET_SECONDS', '25'))
+
+# Long-lived, shared by every request: a source still scraping when a request's
+# budget runs out keeps going here and lands in the cache for the next request,
+# instead of being thrown away with a per-request pool.
+_pool = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix='scrape')
+# source_id -> its running scrape. RLock: add_done_callback runs the callback
+# immediately (in the submitting thread, still holding the lock) if the future
+# has already finished.
+_inflight_lock = threading.RLock()
+_inflight: Dict[str, Future] = {}
 
 # Sort fallback for an article with no usable timestamp — sorts last.
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -150,24 +165,52 @@ def _select_sources(
     return candidates
 
 
-def _fetch_sources(sources: List[Source]) -> List[Dict]:
-    """Fetch (or reuse cached) articles for each source concurrently. A single
+def _forget_inflight(source_id: str, future: Future) -> None:
+    with _inflight_lock:
+        if _inflight.get(source_id) is future:
+            del _inflight[source_id]
+
+
+def _scrape_in_background(source: Source) -> Future:
+    """At most one scrape per source at a time: a request arriving while an
+    earlier (timed-out) request is still scraping the same source waits on that
+    scrape rather than starting a second one."""
+    with _inflight_lock:
+        future = _inflight.get(source.id)
+        if future is None:
+            future = _pool.submit(cache.get_or_fetch, source.id, lambda s=source: _scrape_source(s))
+            _inflight[source.id] = future
+            future.add_done_callback(lambda f, sid=source.id: _forget_inflight(sid, f))
+        return future
+
+
+def _fetch_sources(sources: List[Source]) -> Tuple[List[Dict], int]:
+    """Articles for each source — cached ones immediately, the rest scraped
+    concurrently for up to _TIME_BUDGET_SECONDS. Returns (articles, pending),
+    where pending counts sources still scraping when the budget ran out; they
+    finish in the background and are served from cache next time. A single
     source raising never fails the request — it just contributes nothing."""
     all_articles: List[Dict] = []
-    if not sources:
-        return all_articles
+    futures: List[Future] = []
+    for s in sources:
+        # Fresh cache is read here, not via the pool, so a cache hit never
+        # queues behind other requests' slow scrapes.
+        cached = cache.get(s.id) if cache.is_fresh(s.id) else None
+        if cached is not None:
+            all_articles.extend(cached)
+        else:
+            futures.append(_scrape_in_background(s))
 
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futures = {
-            pool.submit(cache.get_or_fetch, s.id, lambda s=s: _scrape_source(s)): s
-            for s in sources
-        }
-        for future in as_completed(futures):
-            try:
-                all_articles.extend(future.result())
-            except Exception:
-                continue
-    return all_articles
+    if not futures:
+        return all_articles, 0
+
+    done, pending = wait(futures, timeout=_TIME_BUDGET_SECONDS)
+    for future in done:
+        try:
+            all_articles.extend(future.result())
+        except Exception:
+            continue
+    return all_articles, len(pending)
 
 
 def _any_match(haystack: str, needles: Sequence[str]) -> bool:
@@ -202,7 +245,7 @@ def get_articles(
     selected = _select_sources(
         country=countries, state=states, language=languages, source=sources_wanted,
     )
-    articles = _fetch_sources(selected)
+    articles, pending_sources = _fetch_sources(selected)
     articles = dedupe_by_id(articles)
 
     def _match(a: Dict) -> bool:
@@ -230,7 +273,13 @@ def get_articles(
 
     total = len(filtered)
     page = filtered[offset: offset + limit]
-    return {'count': total, 'limit': limit, 'offset': offset, 'articles': page}
+    return {
+        'count': total,
+        'limit': limit,
+        'offset': offset,
+        'articles': page,
+        'pending_sources': pending_sources,
+    }
 
 
 def get_article_by_id(article_id: str) -> Optional[Dict]:

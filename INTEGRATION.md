@@ -231,9 +231,14 @@ GET /news/articles?country=India&language=English&state=Telangana&limit=10&offse
       "published_at": "2026-09-10T09:04:42Z",
       "image_url": "https://th-i.thgim.com/public/incoming/6a050d/article71450922.ece/alternates/LANDSCAPE_1200/Singapore-Management-University-Logo.jpg"
     }
-  ]
+  ],
+  "pending_sources": 0
 }
 ```
+
+`pending_sources` counts matching sources still being scraped when the response
+was sent (see [§11](#11-performance-and-timeouts)). Repeat the request shortly to
+include them.
 
 ### Envelope fields
 
@@ -486,24 +491,29 @@ Scraped articles are cached per source for `CACHE_TTL_SECONDS` (default 600 s),
 so the first request for a given source pays the cost and subsequent requests
 are effectively instant until the entry expires.
 
-An unfiltered request fans out to up to 40 sources across 10 threads, which puts
-the cold worst case in the **60–90 s** range.
+An unfiltered request fans out to up to 40 sources across 10 threads, which
+would put a cold request in the 60–90 s range. Instead, every request answers
+within **`REQUEST_TIME_BUDGET_SECONDS` (default 25 s)** with the sources that are
+ready, so it fits behind gateways that cut off at 30 s (BluGate does). Sources
+still scraping keep going in the background and are cached for the next request;
+the response's **`pending_sources`** says how many there were.
 
 ### What this means for your client
 
-1. **Set a generous HTTP timeout — 120 s.** Default client timeouts are far too
-   short: `axios` has none but browsers cap around 300 s, Python `requests` has
-   no default, and many HTTP clients and API gateways default to 30 s. A 30 s
-   timeout will fail on cold requests that would otherwise have succeeded.
-2. **Always send at least one of `country`, `language`, `state` or `source`.**
+1. **Allow at least 30 s** (budget plus network). Responses never wait longer
+   than the budget for scraping.
+2. **If `pending_sources` > 0, repeat the same request in a minute** to include
+   them — e.g. a "load the rest" button. It costs no re-scrape; it is served
+   from cache.
+3. **Always send at least one of `country`, `language`, `state` or `source`.**
    These narrow the source set *before* scraping. Unfiltered requests are the
    slow path.
-3. **Never block a page render on a cold request.** Show a loading state and
-   tell the user this may take up to a minute. Consider a background fetch at
+4. **Never block a page render on a cold request.** Show a loading state and
+   tell the user this may take up to 30 seconds. Consider a background fetch at
    app startup to warm the cache for your common filter combinations.
-4. **Cache on your side too** if you serve many users. The server's cache is
+5. **Cache on your side too** if you serve many users. The server's cache is
    per-process and in-memory; it is cleared by any restart.
-5. **Expect slow-then-fast.** Do not interpret a fast second request as a
+6. **Expect slow-then-fast.** Do not interpret a fast second request as a
    different code path — it is the cache.
 
 ### Pagination caveat

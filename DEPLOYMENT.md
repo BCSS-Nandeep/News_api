@@ -84,7 +84,7 @@ pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Expected: **208 passed**. The suite is fully offline — it uses a fixture
+Expected: **213 passed**. The suite is fully offline — it uses a fixture
 registry and never touches the network, so it is safe to run in CI and on a
 locked-down build host.
 
@@ -100,7 +100,8 @@ All configuration is via environment variables. There is no config file, and
 | `PORT` | `8000` | [main.py:14](main.py#L14) | Listen port. **Only honoured when started via `python main.py`** — if you launch `uvicorn` directly, pass `--port`. |
 | `CACHE_TTL_SECONDS` | `600` | [services/cache.py:14](services/cache.py#L14) | How long scraped articles stay fresh. Higher = faster responses, staler news. |
 | `MAX_SOURCES_PER_REQUEST` | `40` | [services/news_service.py:32](services/news_service.py#L32) | Safety cap on sources scraped per request. Directly bounds worst-case latency. |
-| `DISCOVERY_MAX_WORKERS` | `10` | [services/news_service.py:33](services/news_service.py#L33) | Thread-pool size for concurrent source scraping. |
+| `DISCOVERY_MAX_WORKERS` | `10` | [services/news_service.py:34](services/news_service.py#L34) | Size of the shared thread pool that scrapes sources (all requests share it). |
+| `REQUEST_TIME_BUDGET_SECONDS` | `25` | [services/news_service.py](services/news_service.py) | Max seconds a request waits for scraping. Sources still running finish in the background and are cached; the response's `pending_sources` counts them. Keep it under any gateway timeout in front of the API (BluGate: 30 s). |
 | `CORS_ORIGINS` | *(unset)* | [api/main.py](api/main.py) | Comma-separated browser origins allowed to call the API (e.g. `https://soceye.example.com,http://localhost:3000`), or `*` for any. Unset sends no CORS headers. Server-side callers are unaffected. |
 
 ### Tuning guidance
@@ -301,9 +302,9 @@ Two things matter here: **generous timeouts** and **buffering turned off**.
 
 Cold requests are slow by nature — the service is scraping live websites.
 Measured on this codebase: **~15 s for a single cold source**, **~0.01 s once
-cached**. An unfiltered cold request fans out to `MAX_SOURCES_PER_REQUEST`
-sources across `DISCOVERY_MAX_WORKERS` threads, so expect the worst case to
-reach **60–90 s**. A default 60 s proxy timeout will cut those requests off.
+cached**. Scraping a full cold source set would take 60–90 s, but each request
+stops waiting after `REQUEST_TIME_BUDGET_SECONDS` (25 s) and returns what is
+ready, so responses arrive within ~25 s. Keep proxy timeouts above that.
 
 ### nginx
 
@@ -392,7 +393,7 @@ is a code change.
 ## 12. Pre-deployment checklist
 
 - [ ] Python 3.11+ present; virtualenv created and `requirements.txt` installed
-- [ ] `python -m pytest -q` → **208 passed**
+- [ ] `python -m pytest -q` → **213 passed**
 - [ ] Outbound HTTPS and DNS verified **from the deployment host**
 - [ ] Environment variables set, or defaults accepted deliberately
 - [ ] Started with a **single** worker (§6)
@@ -432,7 +433,7 @@ Blura-Engine/
 │   └── location_data.py      # Location reference data
 ├── static/index.html         # Built-in dashboard, served at GET /
 ├── deploy/setup.sh           # Ubuntu install/update script (section 7)
-├── tests/                    # 208 offline tests
+├── tests/                    # 213 offline tests
 ├── News_URLs.json            # Source registry — 377 entries, 365 active
 ├── background_worker.py      # Optional pre-warmer (see section 6 before using)
 └── requirements.txt
