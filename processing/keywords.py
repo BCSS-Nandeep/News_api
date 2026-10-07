@@ -7,6 +7,7 @@ it's looking for. No default keyword requirement: an article always matches
 when no `keyword` filter is supplied.
 """
 
+import re
 import unicodedata
 from typing import Optional
 
@@ -24,4 +25,10 @@ def matches_keyword(title: str, summary: str, content: str, keyword: Optional[st
         return True
     needle = normalize_text(keyword.strip())
     haystack = normalize_text(f"{title or ''} {summary or ''} {content or ''}")
+    if needle[:1].isascii() and needle[:1].isalnum():
+        # Latin-script keywords match at the start of a word: 'kill' finds
+        # 'killed'/'killing' but not 'skill'. Indian scripts keep plain substring
+        # matching — their vowel signs aren't regex word characters, so word
+        # boundaries would land inside words there.
+        return re.search(r'(?<!\w)' + re.escape(needle), haystack) is not None
     return needle in haystack
