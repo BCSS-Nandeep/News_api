@@ -27,11 +27,10 @@ _MULTI = 'Comma-separated for multi-select; values are ORed together.'
 @router.get('/news/articles', response_model=ArticleListResponse, summary='Search articles')
 def get_articles(
     keyword: Optional[str] = Query(None, max_length=MAX_KEYWORD_LENGTH, description=(
-        "One phrase, e.g. 'school protest Bhubaneswar': its words are matched separately and results rank "
-        "by how many they contain. Or a list of phrases separated by commas, e.g. 'textbook errors, NYCS, "
-        "Sourav Das': an article matches a phrase when it has all of that phrase's words, and results rank "
-        "by phrases matched. Common words are ignored; \"double quotes\" mark an exact phrase every "
-        "result must contain.")),
+        "A keyword is matched as a whole phrase, e.g. 'CJP School Thik Karo' finds only articles containing "
+        "that phrase. Separate several keywords with commas, e.g. 'textbook errors, NYCS, Sourav Das': an "
+        "article matches if it contains any of them, and articles containing more of them rank first. "
+        "Case and punctuation between words are ignored.")),
     country: Optional[str] = Query(None, description=f"e.g. 'India,United States'. {_MULTI}"),
     language: Optional[str] = Query(None, description=f"e.g. 'English,Telugu'. {_MULTI}"),
     location: Optional[str] = Query(None, description=f"Matched against district/location/state. {_MULTI}"),
@@ -41,7 +40,7 @@ def get_articles(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     min_match: int = Query(1, ge=1, le=MAX_PHRASES, description=(
-        'Minimum phrases (keyword list) or words (single phrase) an article must match. '
+        'Minimum number of the comma-separated keywords an article must contain. '
         'Raise it to drop weak matches from long lists.')),
 ) -> dict:
     """Filtered, paginated articles. Values within one filter are ORed,

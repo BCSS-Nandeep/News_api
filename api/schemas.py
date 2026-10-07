@@ -26,17 +26,16 @@ class ArticleOut(BaseModel):
     image_url: str
     matched_terms: List[str] = Field(
         default_factory=list,
-        description='Which of the query_terms this article contains (keyword searches only).',
+        description='Words of the keywords this article contains (for highlighting).',
     )
     matched_phrases: List[str] = Field(
         default_factory=list,
-        description='Keyword lists only: which of the query_phrases this article fully contains.',
+        description='Which of the query_phrases (keywords) this article contains.',
     )
     match_score: int = Field(
         0,
-        description='Keyword relevance used for ordering (higher first). Lists: phrases matched, then '
-                    'words, then title hits. One phrase: words matched, then the whole phrase, then '
-                    'title hits. 0 without a keyword.',
+        description='Keyword relevance used for ordering (higher first): keywords matched, then '
+                    'keywords found in the title. 0 without a keyword.',
     )
 
 
@@ -54,13 +53,12 @@ class ArticleListResponse(BaseModel):
     )
     query_terms: List[str] = Field(
         default_factory=list,
-        description='Every distinct word searched for (common words dropped; "quoted phrases" '
-                    'are required and not listed).',
+        description='Every distinct word across the keywords.',
     )
     query_phrases: List[str] = Field(
         default_factory=list,
-        description='The keyword list as parsed (duplicates and common-word-only items dropped). '
-                    'Empty for a single phrase.',
+        description='The keywords as parsed (comma-separated, duplicates dropped), each matched '
+                    'as a whole phrase.',
     )
 
 

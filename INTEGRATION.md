@@ -183,8 +183,8 @@ from cache), filters, sorts newest-first, and paginates.
 
 | Parameter | Type | Default | Constraints | Description |
 |---|---|---|---|---|
-| `keyword` | `string` | — | — | **One phrase** — words matched separately, ranked by how many appear (`kill` matches killed, not skill) — **or a list of phrases** separated by commas, semicolons or new lines: an article matches a phrase when it contains *all* of that phrase's words, and results rank by phrases matched. Common words are ignored; `"double quotes"` = exact phrase every result must contain. Max 6000 characters. e.g. `textbook errors, NYCS, Sourav Das`. |
-| `min_match` | `integer` | `1` | 1–150 | Minimum phrases (list) or words (one phrase) an article must match. Raise it to drop weak matches from long lists. |
+| `keyword` | `string` | — | — | A keyword is matched as a **whole phrase**: `CJP School Thik Karo` finds only articles containing that phrase (case and punctuation between words ignored; a Latin keyword starts at a word, so `kill` finds killed, not skill). Separate **several keywords with commas** (or semicolons / new lines): an article matches if it contains any of them, and articles containing more rank first. Double quotes only group text that contains a comma. Max 6000 characters. |
+| `min_match` | `integer` | `1` | 1–150 | Minimum number of the comma-separated keywords an article must contain. |
 | `country` | `string` | — | — | Comma-separated. e.g. `India,United States` |
 | `language` | `string` | — | — | Comma-separated. e.g. `English,Telugu` |
 | `state` | `string` | — | — | Comma-separated. e.g. `Telangana,Andhra Pradesh` |
@@ -545,7 +545,7 @@ A consolidated list of everything that commonly surprises a first integration.
 | 9 | **`summary` may duplicate `title`.** It falls back to the title when no description exists — de-duplicate before rendering both. |
 | 10 | **`district`, `location` and `state` are often empty**, especially outside India. Never make them required. |
 | 11 | **Filter matching is substring-based.** `country=United` matches both the US and the UK. Send full values from `/news/sources`. |
-| 12 | **Commas in `keyword` separate phrases.** Each article lists `matched_terms` (words found) and, for lists, `matched_phrases`; the response's `query_terms` / `query_phrases` show how the keyword was parsed. Results come back ordered by `match_score`. |
+| 12 | **Commas in `keyword` separate keywords; each is a whole phrase.** Each article lists `matched_phrases` (keywords found) and `matched_terms` (their words, for highlighting); `query_phrases` shows how the keyword was parsed. Results come back ordered by `match_score`. |
 | 13 | **Repeated query parameters silently lose values.** `?country=A&country=B` keeps only `B`. Always join multi-select values with commas into one parameter. See [§8](#8-filter-semantics). |
 | 14 | **Article ids are URL-derived and cache-scoped.** Stable for the same URL, but resolvable via `/news/articles/{id}` only while cached. Don't build permalinks on them. |
 | 15 | **Cold requests take up to ~90 s.** Use a 120 s timeout. |

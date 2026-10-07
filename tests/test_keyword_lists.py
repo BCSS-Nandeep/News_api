@@ -1,7 +1,7 @@
 """
-Keyword lists: comma/semicolon/new-line separated phrases. An article matches a
-phrase when it contains all of the phrase's words; articles rank by phrases
-matched; min_match sets the minimum. Uses a real investigator's list.
+Keyword lists: comma/semicolon/new-line separated keywords, each matched as a
+whole phrase; articles rank by how many keywords they contain; min_match sets
+the minimum. Uses a real investigator's list.
 """
 
 import time
@@ -50,24 +50,12 @@ GENERIC = (
 
 # ── parsing ───────────────────────────────────────────────────────────────────
 
-def test_list_is_split_into_phrases():
-    q = parse_keyword("CJP School Thik Karo campaign, NYCS; textbook errors\nSourav Das")
-    assert q.is_list
-    assert [p.text for p in q.phrases] == ['cjp school thik karo campaign', 'nycs', 'textbook errors', 'sourav das']
-    assert q.phrases[0].terms == ['cjp', 'school', 'thik', 'karo', 'campaign']
-
-
-def test_list_drops_duplicates_common_words_and_possessives():
-    q = parse_keyword("school and mass, School  Mass, the, minister's exit, ministers exit")
-    assert [p.terms for p in q.phrases] == [['school', 'mass'], ['minister', 'exit'], ['ministers', 'exit']]
-
-
 def test_analyst_list_parses():
     q = parse_keyword(ANALYST_LIST)
     assert q.is_list
-    assert len(q.phrases) == 80  # 80 comma-separated items, all distinct
-    assert 'nycs' in q.terms and 'demanding' in q.terms
-    assert all(p.terms for p in q.phrases)
+    assert len(q.phrases) == 80  # 80 comma-separated keywords, all distinct
+    texts = [p.text for p in q.phrases]
+    assert 'cjp school thik karo campaign' in texts and 'nycs' in texts and 'school and mass' in texts
 
 
 def test_list_is_capped():
@@ -75,43 +63,28 @@ def test_list_is_capped():
     assert len(q.phrases) == MAX_PHRASES
 
 
-def test_quoted_phrase_still_required_in_a_list():
-    q = parse_keyword('"school thik karo", nycs, textbook errors')
-    assert q.required == ['school thik karo']
-    assert [p.text for p in q.phrases] == ['nycs', 'textbook errors']
-
-
 # ── matching ──────────────────────────────────────────────────────────────────
 
-def test_a_list_phrase_needs_all_its_words_in_any_order():
+def test_each_keyword_must_appear_as_a_phrase():
     q = parse_keyword("textbook errors, education minister resignation")
-    m = match_keyword("Errors found in new textbook", "", "", q)
-    assert m.matched_phrases == ['textbook errors']
-    assert match_keyword("Textbook prices rise", "", "", q) is None, "'textbook' alone is not 'textbook errors'"
+    assert match_keyword("Textbook errors found", "", "", q).matched_phrases == ['textbook errors']
+    assert match_keyword("Errors found in new textbook", "", "", q) is None, "both words, but not the phrase"
 
 
-def test_list_ranks_by_phrases_matched():
+def test_list_ranks_by_keywords_matched():
     q = parse_keyword(ANALYST_LIST)
     story = match_keyword(*STORY, q)
     generic = match_keyword(*GENERIC, q)
-    assert len(story.matched_phrases) >= 30
-    assert generic is not None and 1 <= len(generic.matched_phrases) <= 3
+    assert len(story.matched_phrases) == 26
+    assert {'nycs', 'cockroach janata party', 'school thik karo', 'sourav das', 'textbook errors'} <= set(story.matched_phrases)
+    assert generic.matched_phrases == ['odisha government', 'initiated']
     assert story.score > generic.score
-    assert 'nycs' in story.matched_terms and 'sourav' in story.matched_terms
 
 
 def test_min_match_filters_out_weak_matches():
     q = parse_keyword(ANALYST_LIST)
-    assert match_keyword(*GENERIC, q, min_match=5) is None
-    assert match_keyword(*STORY, q, min_match=5) is not None
-
-
-def test_min_match_on_a_single_phrase_counts_words():
-    q = parse_keyword("CJP School Thik Karo")
-    assert match_keyword("New school opened", "", "", q, min_match=2) is None
-    assert match_keyword("CJP school visit", "", "", q, min_match=2).matched_terms == ['cjp', 'school']
-    # asking for more words than the phrase has means "all of them"
-    assert match_keyword("CJP school thik karo", "", "", q, min_match=9) is not None
+    assert match_keyword(*GENERIC, q, min_match=3) is None
+    assert match_keyword(*STORY, q, min_match=3) is not None
 
 
 def test_list_scoring_is_fast_enough_for_long_lists():
@@ -120,7 +93,7 @@ def test_list_scoring_is_fast_enough_for_long_lists():
     started = time.perf_counter()
     for _ in range(300):
         match_keyword(STORY[0], STORY[1], body, q)
-    assert time.perf_counter() - started < 3.0, '300 articles x ~100 phrases should take well under a request budget'
+    assert time.perf_counter() - started < 3.0, '300 articles x 80 keywords should take well under a request budget'
 
 
 # ── end to end through get_articles ───────────────────────────────────────────
@@ -142,12 +115,12 @@ def test_get_articles_with_a_list(fixture_registry, monkeypatch):
     monkeypatch.setattr(news_service, '_scrape_source', fake_scrape)
     result = news_service.get_articles(keyword=ANALYST_LIST, source='test_telangana_telugu')
     assert [a['id'] for a in result['articles']] == ['story', 'generic'], 'story first despite being older'
-    assert len(result['query_phrases']) == len(parse_keyword(ANALYST_LIST).phrases)
+    assert len(result['query_phrases']) == 80
     assert 'nycs' in result['articles'][0]['matched_phrases']
 
-    strict = news_service.get_articles(keyword=ANALYST_LIST, source='test_telangana_telugu', min_match=5)
+    strict = news_service.get_articles(keyword=ANALYST_LIST, source='test_telangana_telugu', min_match=3)
     assert [a['id'] for a in strict['articles']] == ['story']
 
     single = news_service.get_articles(keyword='nycs', source='test_telangana_telugu')
-    assert single['query_phrases'] == [], 'one phrase is not a list'
-    assert single['articles'][0]['matched_phrases'] == []
+    assert single['query_phrases'] == ['nycs']
+    assert single['articles'][0]['matched_phrases'] == ['nycs']

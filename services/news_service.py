@@ -235,8 +235,8 @@ def get_articles(
 ) -> Dict:
     """Filters combine as (a OR b) AND (c OR d): values selected within one
     checkbox group are alternatives, separate groups all have to hold. An
-    omitted filter never restricts results. `keyword` may be one phrase or a
-    comma-separated list of phrases — see processing/keywords.py."""
+    omitted filter never restricts results. `keyword` is one keyword (matched as a
+    whole phrase) or several separated by commas — see processing/keywords.py."""
     countries = parse_multi(country)
     languages = parse_multi(language)
     locations = parse_multi(location)
@@ -301,7 +301,7 @@ def get_articles(
         'articles': page,
         'pending_sources': pending_sources,
         'query_terms': query.terms,
-        'query_phrases': [p.text for p in query.phrases] if query.is_list else [],
+        'query_phrases': [p.text for p in query.phrases],
     }
 
 

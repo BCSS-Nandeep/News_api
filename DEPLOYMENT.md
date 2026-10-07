@@ -84,7 +84,7 @@ pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Expected: **243 passed**. The suite is fully offline — it uses a fixture
+Expected: **242 passed**. The suite is fully offline — it uses a fixture
 registry and never touches the network, so it is safe to run in CI and on a
 locked-down build host.
 
@@ -393,7 +393,7 @@ is a code change.
 ## 12. Pre-deployment checklist
 
 - [ ] Python 3.11+ present; virtualenv created and `requirements.txt` installed
-- [ ] `python -m pytest -q` → **243 passed**
+- [ ] `python -m pytest -q` → **242 passed**
 - [ ] Outbound HTTPS and DNS verified **from the deployment host**
 - [ ] Environment variables set, or defaults accepted deliberately
 - [ ] Started with a **single** worker (§6)
@@ -433,7 +433,7 @@ Blura-Engine/
 │   └── location_data.py      # Location reference data
 ├── static/index.html         # Built-in dashboard, served at GET /
 ├── deploy/setup.sh           # Ubuntu install/update script (section 7)
-├── tests/                    # 243 offline tests
+├── tests/                    # 242 offline tests
 ├── News_URLs.json            # Source registry — 377 entries, 365 active
 ├── background_worker.py      # Optional pre-warmer (see section 6 before using)
 └── requirements.txt
