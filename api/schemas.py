@@ -24,6 +24,20 @@ class ArticleOut(BaseModel):
     location: str
     published_at: datetime
     image_url: str
+    matched_terms: List[str] = Field(
+        default_factory=list,
+        description='Which of the query_terms this article contains (keyword searches only).',
+    )
+    matched_phrases: List[str] = Field(
+        default_factory=list,
+        description='Keyword lists only: which of the query_phrases this article fully contains.',
+    )
+    match_score: int = Field(
+        0,
+        description='Keyword relevance used for ordering (higher first). Lists: phrases matched, then '
+                    'words, then title hits. One phrase: words matched, then the whole phrase, then '
+                    'title hits. 0 without a keyword.',
+    )
 
 
 class ArticleListResponse(BaseModel):
@@ -37,6 +51,16 @@ class ArticleListResponse(BaseModel):
             'Matching sources still being scraped when the response was sent. '
             'They finish in the background; repeat the request shortly to include them.'
         ),
+    )
+    query_terms: List[str] = Field(
+        default_factory=list,
+        description='Every distinct word searched for (common words dropped; "quoted phrases" '
+                    'are required and not listed).',
+    )
+    query_phrases: List[str] = Field(
+        default_factory=list,
+        description='The keyword list as parsed (duplicates and common-word-only items dropped). '
+                    'Empty for a single phrase.',
     )
 
 

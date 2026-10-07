@@ -27,7 +27,7 @@ from scraper.sources_registry import (
     parse_multi,
 )
 from processing.location import resolve_location
-from processing.keywords import matches_keyword
+from processing.keywords import match_keyword, parse_keyword
 from services import cache
 
 _MAX_SOURCES_PER_REQUEST = int(os.getenv('MAX_SOURCES_PER_REQUEST', '40'))
@@ -231,10 +231,12 @@ def get_articles(
     source: FilterValue = None,
     limit: int = 20,
     offset: int = 0,
+    min_match: int = 1,
 ) -> Dict:
     """Filters combine as (a OR b) AND (c OR d): values selected within one
     checkbox group are alternatives, separate groups all have to hold. An
-    omitted filter never restricts results."""
+    omitted filter never restricts results. `keyword` may be one phrase or a
+    comma-separated list of phrases — see processing/keywords.py."""
     countries = parse_multi(country)
     languages = parse_multi(language)
     locations = parse_multi(location)
@@ -247,10 +249,9 @@ def get_articles(
     )
     articles, pending_sources = _fetch_sources(selected)
     articles = dedupe_by_id(articles)
+    query = parse_keyword(keyword)
 
     def _match(a: Dict) -> bool:
-        if not matches_keyword(a['title'], a['summary'], a['content'], keyword):
-            return False
         if not _any_match(a.get('country', ''), countries):
             return False
         if not _any_match(a['language'], languages):
@@ -266,10 +267,30 @@ def get_articles(
             return False
         return True
 
-    filtered = [a for a in articles if _match(a)]
-    # Defensive: normalizing at write time above is the real fix, but a
-    # single stray naive timestamp must never turn a whole request into a 500.
-    filtered.sort(key=lambda a: _as_utc(a['published_at']) or _EPOCH, reverse=True)
+    ranked = []
+    for a in articles:
+        if not _match(a):
+            continue
+        match = match_keyword(a['title'], a['summary'], a['content'], query, min_match)
+        if match is None:
+            continue
+        # Copy: `a` is the cached dict shared with every other request.
+        ranked.append(({
+            **a,
+            'matched_terms': match.matched_terms,
+            'matched_phrases': match.matched_phrases,
+            'match_score': match.score,
+        }, match.sort_key))
+
+    # Best keyword match first, then newest, then id so pages never reshuffle.
+    # Defensive _as_utc: normalizing at write time is the real fix, but a single
+    # stray naive timestamp must never turn a whole request into a 500.
+    ranked.sort(key=lambda pair: (
+        pair[1],
+        _as_utc(pair[0]['published_at']) or _EPOCH,
+        pair[0]['id'],
+    ), reverse=True)
+    filtered = [a for a, _ in ranked]
 
     total = len(filtered)
     page = filtered[offset: offset + limit]
@@ -279,6 +300,8 @@ def get_articles(
         'offset': offset,
         'articles': page,
         'pending_sources': pending_sources,
+        'query_terms': query.terms,
+        'query_phrases': [p.text for p in query.phrases] if query.is_list else [],
     }
 
 
