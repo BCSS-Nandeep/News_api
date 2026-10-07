@@ -36,7 +36,7 @@ Two consequences shape the whole deployment, and both are covered in detail belo
 
 | Requirement | Notes |
 |---|---|
-| Python 3.11+ | Validated on 3.14.6. No version ceiling in `requirements.txt`. |
+| Python 3.11+ | Validated on 3.12 and 3.14. No version ceiling in `requirements.txt`. |
 | `pip` / `venv` | Standard library `venv` is sufficient. |
 | Outbound HTTPS (443) | **Mandatory.** The service scrapes ~365 external news sites. Without egress it returns empty results, not errors. |
 | Outbound DNS | Required for the same reason. |
@@ -84,7 +84,7 @@ pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Expected: **201 passed**. The suite is fully offline — it uses a fixture
+Expected: **208 passed**. The suite is fully offline — it uses a fixture
 registry and never touches the network, so it is safe to run in CI and on a
 locked-down build host.
 
@@ -101,6 +101,7 @@ All configuration is via environment variables. There is no config file, and
 | `CACHE_TTL_SECONDS` | `600` | [services/cache.py:14](services/cache.py#L14) | How long scraped articles stay fresh. Higher = faster responses, staler news. |
 | `MAX_SOURCES_PER_REQUEST` | `40` | [services/news_service.py:32](services/news_service.py#L32) | Safety cap on sources scraped per request. Directly bounds worst-case latency. |
 | `DISCOVERY_MAX_WORKERS` | `10` | [services/news_service.py:33](services/news_service.py#L33) | Thread-pool size for concurrent source scraping. |
+| `CORS_ORIGINS` | *(unset)* | [api/main.py](api/main.py) | Comma-separated browser origins allowed to call the API (e.g. `https://soceye.example.com,http://localhost:3000`), or `*` for any. Unset sends no CORS headers. Server-side callers are unaffected. |
 
 ### Tuning guidance
 
@@ -203,6 +204,25 @@ python background_worker.py --once
 ---
 
 ## 7. Running as a managed service
+
+### Scripted install (Ubuntu)
+
+[deploy/setup.sh](deploy/setup.sh) does everything in this section and §3 on an
+Ubuntu server: clones the repo to `/opt/blura-engine`, builds the virtualenv,
+runs the test suite, writes `/etc/blura-news-api.env`, installs and starts a
+systemd service running as an unprivileged `blura` user, and checks
+`/health`. It installs apt packages only if they are missing, so it is safe on
+a server shared with other Python apps.
+
+```bash
+curl -fsSL -o setup.sh https://raw.githubusercontent.com/BCSS-Nandeep/News_api/international/deploy/setup.sh
+sudo bash setup.sh                  # or: sudo env PORT=8010 bash setup.sh
+```
+
+Run the same command again to update to the latest commit on the branch. The
+settings file is never overwritten; edit it and `sudo systemctl restart
+blura-news-api` to apply changes. Inbound access to the port must still be
+allowed in the cloud provider's firewall.
 
 ### systemd (Linux)
 
@@ -331,7 +351,7 @@ by deployment. Raise them with whoever owns the hosting environment.
 |---|---|---|
 | **Authentication** | None. Every endpoint is open. | Do not expose publicly. Restrict to internal networks, or put an API gateway / proxy-level auth in front. |
 | **Rate limiting** | None. | Apply at the proxy. Each uncached request can trigger dozens of outbound scrapes, so this doubles as protection for *your* egress. |
-| **CORS** | **No CORS middleware is configured.** | Browser clients on a different origin will be blocked. See [INTEGRATION.md](INTEGRATION.md) §10 — it needs a small code change. |
+| **CORS** | Off unless `CORS_ORIGINS` is set (§4). The scripted install sets `*`. | List the real frontend origins instead of `*` once they are known. See [INTEGRATION.md](INTEGRATION.md) §10. |
 | **Inbound surface** | Read-only `GET` endpoints; no writes, no user input reaching a datastore. | — |
 | **Interactive docs** | `/docs` and `/redoc` are enabled. | Consider blocking at the proxy if the API is internet-facing. |
 | **Outbound requests** | Fetches URLs listed in `News_URLs.json`. | Treat the registry as trusted configuration and review changes to it. |
@@ -361,7 +381,8 @@ is a code change.
 | First request very slow, later ones instant | Normal — cold cache, then cache hits. | None. Lower `MAX_SOURCES_PER_REQUEST` if the cold path must be faster. |
 | `504` from the proxy | Proxy read timeout shorter than a cold scrape. | Raise `proxy_read_timeout` to 120 s (§8). |
 | `/news/articles/{id}` returns `404` for an id just received | Cache entry expired, process restarted, or multiple workers are running. | Re-request `/news/articles` to re-warm, then look the id up. Confirm single-worker (§6). |
-| Browser client gets a CORS error | No CORS middleware (§9). | See [INTEGRATION.md](INTEGRATION.md) §10. |
+| Browser client gets a CORS error | Client's origin not in `CORS_ORIGINS` (§4). | Add it (exact scheme, host and port), then restart. |
+| Browser blocks the request as "mixed content" | An `https://` page calling the API over plain `http://`. | Serve the API over HTTPS through a reverse proxy (§8), or call it from your backend. |
 | Results are stale | `CACHE_TTL_SECONDS` too high. | Lower it; restart to clear the cache immediately. |
 | `pip install` tries to compile `pydantic-core` | Python release newer than the available wheels. | Use Python 3.12 for the most stable wheel coverage, or install a Rust toolchain. |
 | A specific source never yields articles | Site changed layout, blocks scrapers, or renders body content in JavaScript. | Expected and tolerated by design — one dead source never fails a request. Set `"active": false` in `News_URLs.json` to stop scraping it. |
@@ -371,7 +392,7 @@ is a code change.
 ## 12. Pre-deployment checklist
 
 - [ ] Python 3.11+ present; virtualenv created and `requirements.txt` installed
-- [ ] `python -m pytest -q` → **201 passed**
+- [ ] `python -m pytest -q` → **208 passed**
 - [ ] Outbound HTTPS and DNS verified **from the deployment host**
 - [ ] Environment variables set, or defaults accepted deliberately
 - [ ] Started with a **single** worker (§6)
@@ -410,7 +431,8 @@ Blura-Engine/
 │   ├── location.py           # District/location resolution
 │   └── location_data.py      # Location reference data
 ├── static/index.html         # Built-in dashboard, served at GET /
-├── tests/                    # 201 offline tests
+├── deploy/setup.sh           # Ubuntu install/update script (section 7)
+├── tests/                    # 208 offline tests
 ├── News_URLs.json            # Source registry — 377 entries, 365 active
 ├── background_worker.py      # Optional pre-warmer (see section 6 before using)
 └── requirements.txt

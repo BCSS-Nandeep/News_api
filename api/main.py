@@ -6,9 +6,12 @@ Blura News API — FastAPI app for SocEye.
 Run with: python main.py   (or: uvicorn api.main:app --reload)
 """
 
+import os
 from pathlib import Path
+from typing import List
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from api.routes import articles, health, sources
@@ -16,6 +19,15 @@ from api.routes import articles, health, sources
 _STATIC_DIR = Path(__file__).resolve().parent.parent / 'static'
 _UI_FILE = _STATIC_DIR / 'index.html'
 _REFERENCE_FILE = _STATIC_DIR / 'reference.html'
+
+
+def _cors_origins() -> List[str]:
+    """Browser origins allowed to call the API, from CORS_ORIGINS
+    (comma-separated, e.g. 'https://soceye.example.com,http://localhost:3000',
+    or '*' for any). Unset means no CORS headers at all: only same-origin
+    pages — the bundled dashboard — and non-browser clients can call it."""
+    raw = os.getenv('CORS_ORIGINS', '')
+    return [origin.strip().rstrip('/') for origin in raw.split(',') if origin.strip()]
 
 app = FastAPI(
     title='Blura News API',
@@ -31,6 +43,17 @@ app = FastAPI(
         {'name': 'Articles', 'description': 'Scraped, normalized articles with keyword/location/language filters.'},
     ],
 )
+
+_origins = _cors_origins()
+if _origins:
+    # Read-only GET API with no cookies or auth, so credentials stay off —
+    # which is also what makes '*' a valid value here.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_methods=['GET'],
+        allow_headers=['*'],
+    )
 
 app.include_router(health.router)
 app.include_router(sources.router)

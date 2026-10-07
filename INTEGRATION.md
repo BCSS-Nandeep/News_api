@@ -433,33 +433,30 @@ in the response. A lower-than-expected `count` may reflect a partial scrape.
 
 ## 10. CORS — read before integrating a browser app
 
-> **The API does not currently send CORS headers.** No `CORSMiddleware` is
-> registered in [api/main.py](api/main.py). The bundled dashboard works only
-> because it is served from the API's own origin at `GET /`.
+> **CORS headers are sent only for origins listed in `CORS_ORIGINS`.** With the
+> variable unset, the API sends none; the bundled dashboard still works because
+> it is served from the API's own origin at `GET /`.
 
-**Any browser application on a different origin will be blocked by the browser**
-— a React app on `http://localhost:3000` calling `http://localhost:8000` will
-fail, even though the API itself responds `200`.
+**A browser application on an origin that is not listed will be blocked by the
+browser.** For example, a React app on `http://localhost:3000` calling
+`http://localhost:8000` fails, even though the API itself responds `200`.
 
 This is **not** affected by anything you do client-side. `fetch` options, axios
 configuration and proxy headers cannot fix it. One of the following is required:
 
-**Option A — enable CORS on the API (recommended).** A four-line change in
-[api/main.py](api/main.py):
+**Option A — allow the origin on the API (recommended).** Set `CORS_ORIGINS` on
+the server (in `/etc/blura-news-api.env` for the scripted install) and restart:
 
-```python
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['https://soceye.example.com'],  # list real origins, not ['*']
-    allow_methods=['GET'],
-    allow_headers=['*'],
-)
+```bash
+CORS_ORIGINS=https://soceye.example.com,http://localhost:3000
 ```
 
-Prefer an explicit origin list over `['*']`, and drive it from an environment
-variable so each environment can differ.
+Use exact origins (scheme, host and port). `*` allows any origin. Prefer an
+explicit list once the frontends are known.
+
+Separately, a page served over `https://` cannot call an API on plain `http://`:
+the browser blocks it as mixed content. Serve the API over HTTPS behind a
+reverse proxy, or use Option C.
 
 **Option B — same-origin reverse proxy.** Serve the API under a path on the same
 origin as the frontend (e.g. nginx routing `/api/` to the API), so the browser
@@ -527,7 +524,7 @@ A consolidated list of everything that commonly surprises a first integration.
 | # | Note |
 |---|---|
 | 1 | **No authentication exists.** Do not send an `Authorization` header — it is ignored. If your platform requires auth, add it at a gateway. |
-| 2 | **No CORS headers.** Browser apps on another origin are blocked. See [§10](#10-cors--read-before-integrating-a-browser-app). |
+| 2 | **CORS is opt-in per origin.** Browser apps on an origin missing from `CORS_ORIGINS` are blocked. See [§10](#10-cors--read-before-integrating-a-browser-app). |
 | 3 | **`/news/sources` returns a bare array**; `/news/articles` returns a wrapped object. Different shapes — don't write one parser for both. |
 | 4 | **`count` is the pre-pagination total**, not `articles.length`. Use it for page counts. |
 | 5 | **Empty results are `200`, not `404`.** Handle `count: 0` as normal. |
