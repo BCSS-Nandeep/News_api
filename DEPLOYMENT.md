@@ -84,7 +84,7 @@ pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Expected: **245 passed**. The suite is fully offline — it uses a fixture
+Expected: **247 passed**. The suite is fully offline — it uses a fixture
 registry and never touches the network, so it is safe to run in CI and on a
 locked-down build host.
 
@@ -391,7 +391,7 @@ is a code change.
 ## 12. Pre-deployment checklist
 
 - [ ] Python 3.11+ present; virtualenv created and `requirements.txt` installed
-- [ ] `python -m pytest -q` → **245 passed**
+- [ ] `python -m pytest -q` → **247 passed**
 - [ ] Outbound HTTPS and DNS verified **from the deployment host**
 - [ ] Environment variables set, or defaults accepted deliberately
 - [ ] Started with a **single** worker (§6)

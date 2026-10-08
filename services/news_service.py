@@ -27,7 +27,7 @@ from scraper.sources_registry import (
     parse_multi,
 )
 from processing.location import resolve_location
-from processing.keywords import match_keyword, parse_keyword
+from processing.keywords import KeywordMatch, SearchText, match_search_text, parse_keyword, search_text
 from services import cache
 
 _MAX_WORKERS = int(os.getenv('DISCOVERY_MAX_WORKERS', '10'))
@@ -146,6 +146,34 @@ def _scrape_source(source: Source) -> List[Dict]:
     return dedupe_by_id(articles)
 
 
+# Private key on cached articles: their keyword-matching text, prepared once when
+# the source is scraped. Normalizing ~5,000 article bodies on every request took
+# seconds once all sources were searched, pushing responses past the gateway's
+# 30 s cutoff. Never part of a response (see _public).
+_SEARCH_KEY = '_search'
+
+
+def _scrape_prepared(source: Source) -> List[Dict]:
+    """_scrape_source plus each article's search text, built in the scraping
+    thread before the articles are cached (nothing else can see them yet)."""
+    articles = _scrape_source(source)
+    for a in articles:
+        a[_SEARCH_KEY] = search_text(a['title'], a['summary'], a['content'])
+    return articles
+
+
+def _searchable(article: Dict) -> SearchText:
+    # Built here only for an article cached without it; cached dicts are shared
+    # between requests, so it is not stored back.
+    return article.get(_SEARCH_KEY) or search_text(
+        article['title'], article['summary'], article['content'],
+    )
+
+
+def _public(article: Dict) -> Dict:
+    return {k: v for k, v in article.items() if k != _SEARCH_KEY}
+
+
 def _select_sources(
     country: FilterValue = None,
     state: FilterValue = None,
@@ -177,7 +205,7 @@ def _scrape_in_background(source: Source) -> Future:
     with _inflight_lock:
         future = _inflight.get(source.id)
         if future is None:
-            future = _pool.submit(cache.get_or_fetch, source.id, lambda s=source: _scrape_source(s))
+            future = _pool.submit(cache.get_or_fetch, source.id, lambda s=source: _scrape_prepared(s))
             _inflight[source.id] = future
             future.add_done_callback(lambda f, sid=source.id: _forget_inflight(sid, f))
         return future
@@ -270,12 +298,15 @@ def get_articles(
     for a in articles:
         if not _match(a):
             continue
-        match = match_keyword(a['title'], a['summary'], a['content'], query, min_match)
+        match = (
+            match_search_text(_searchable(a), query, min_match)
+            if query.phrases else KeywordMatch([], [], 0)
+        )
         if match is None:
             continue
         # Copy: `a` is the cached dict shared with every other request.
         ranked.append(({
-            **a,
+            **_public(a),
             'matched_terms': match.matched_terms,
             'matched_phrases': match.matched_phrases,
             'match_score': match.score,
@@ -310,7 +341,7 @@ def get_article_by_id(article_id: str) -> Optional[Dict]:
     that has aged out of the cache or was never scraped in this process."""
     for article in cache.all_cached_articles():
         if article['id'] == article_id:
-            return article
+            return _public(article)
     return None
 
 
@@ -321,7 +352,7 @@ def refresh_all_sources() -> int:
     sources = [s for s in sources if s.active]
     total = 0
     with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futures = {pool.submit(_scrape_source, s): s for s in sources}
+        futures = {pool.submit(_scrape_prepared, s): s for s in sources}
         for future in as_completed(futures):
             s = futures[future]
             try:

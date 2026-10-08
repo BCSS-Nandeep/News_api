@@ -148,6 +148,42 @@ class KeywordMatch:
         return (len(self.matched_phrases), self.title_hits)
 
 
+@dataclass(frozen=True)
+class SearchText:
+    """An article's text in the forms keywords are matched against. Building it
+    (NFKC + casefold + word stream over the whole body) is the expensive part of
+    matching, so the News API builds it once per scraped article, not per request."""
+    text: str          # normalized title + summary + content, whitespace collapsed
+    words: str         # ascii_words(text)
+    title: str         # normalized title, whitespace collapsed
+    title_words: str   # ascii_words(title)
+
+
+def search_text(title: str, summary: str, content: str) -> SearchText:
+    norm_title = normalize_text(title or '')
+    text = spaced(f"{norm_title} {normalize_text(summary or '')} {normalize_text(content or '')}")
+    title_text = spaced(norm_title)
+    return SearchText(text, ascii_words(text), title_text, ascii_words(title_text))
+
+
+def match_search_text(
+    searchable: SearchText, query: KeywordQuery, min_match: int = 1,
+) -> Optional[KeywordMatch]:
+    """match_keyword() for text already prepared with search_text()."""
+    if query.empty:
+        return KeywordMatch([], [], 0)
+    matched = [p for p in query.phrases if contains_phrase(p.text, searchable.text, searchable.words)]
+    if len(matched) < min(max(1, min_match), len(query.phrases)):
+        return None
+    return KeywordMatch(
+        matched_phrases=[p.text for p in matched],
+        matched_terms=list(dict.fromkeys(w for p in matched for w in p.words)),
+        title_hits=sum(
+            1 for p in matched if contains_phrase(p.text, searchable.title, searchable.title_words)
+        ),
+    )
+
+
 def match_keyword(
     title: str, summary: str, content: str, query: KeywordQuery, min_match: int = 1,
 ) -> Optional[KeywordMatch]:
@@ -155,20 +191,7 @@ def match_keyword(
     keywords. An empty query matches everything with score 0."""
     if query.empty:
         return KeywordMatch([], [], 0)
-
-    norm_title = normalize_text(title or '')
-    text = spaced(f"{norm_title} {normalize_text(summary or '')} {normalize_text(content or '')}")
-    words, title_text = ascii_words(text), spaced(norm_title)
-    title_words = ascii_words(title_text)
-
-    matched = [p for p in query.phrases if contains_phrase(p.text, text, words)]
-    if len(matched) < min(max(1, min_match), len(query.phrases)):
-        return None
-    return KeywordMatch(
-        matched_phrases=[p.text for p in matched],
-        matched_terms=list(dict.fromkeys(w for p in matched for w in p.words)),
-        title_hits=sum(1 for p in matched if contains_phrase(p.text, title_text, title_words)),
-    )
+    return match_search_text(search_text(title, summary, content), query, min_match)
 
 
 def matches_keyword(title: str, summary: str, content: str, keyword: Optional[str] = None) -> bool:

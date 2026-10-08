@@ -282,6 +282,33 @@ class TestNoSourceTruncation:
         assert [a['source_id'] for a in result['articles']] == ['bulk_119']
 
 
+class TestPreparedSearchText:
+    """Keyword text is prepared once per scraped article, not on every request."""
+
+    def test_searches_reuse_text_prepared_at_scrape_time(self, fixture_registry, monkeypatch):
+        install_fake_scraper(monkeypatch, extra_by_source={
+            'test_us_english': {'title': 'Hit-and-run case in Ohio'},
+        })
+        news_service.get_articles()  # scrapes and caches every source
+        calls = []
+        real = news_service.search_text
+        monkeypatch.setattr(news_service, 'search_text', lambda *a: calls.append(a) or real(*a))
+        result = news_service.get_articles(keyword='hit and run, Ohio')
+        assert calls == []
+        assert [a['source_id'] for a in result['articles']] == ['test_us_english']
+        assert result['articles'][0]['matched_phrases'] == ['hit and run', 'ohio']
+        assert result['articles'][0]['match_score'] == 2002
+
+    def test_prepared_text_never_appears_in_responses(self, fixture_registry, monkeypatch):
+        install_fake_scraper(monkeypatch)
+        listed = client.get('/news/articles', params={'keyword': 'headline'}).json()
+        assert listed['count'] == 6
+        assert all('_search' not in a for a in listed['articles'])
+        one = client.get(f"/news/articles/{listed['articles'][0]['id']}").json()
+        assert '_search' not in one
+        assert '_search' not in news_service.get_article_by_id(listed['articles'][0]['id'])
+
+
 class TestServiceArticleFiltering:
     def test_articles_carry_the_source_country(self, fixture_registry, monkeypatch):
         install_fake_scraper(monkeypatch)
