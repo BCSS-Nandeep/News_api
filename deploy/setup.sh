@@ -101,8 +101,6 @@ CORS_ORIGINS=*
 
 # Seconds scraped articles stay cached before being re-scraped.
 CACHE_TTL_SECONDS=600
-# Max news sources scraped for one request (bounds worst-case response time).
-MAX_SOURCES_PER_REQUEST=40
 # Sources scraped in parallel.
 DISCOVERY_MAX_WORKERS=10
 # Max seconds a request waits for scraping; slower sources finish in the
@@ -112,6 +110,9 @@ EOF
   chmod 644 "$ENV_FILE"
 else
   echo "Keeping existing settings in $ENV_FILE"
+  # MAX_SOURCES_PER_REQUEST no longer exists (every matching source is searched);
+  # drop it so the file doesn't suggest a cap that isn't applied.
+  sed -i '/^# Max news sources scraped for one request/d; /^MAX_SOURCES_PER_REQUEST=/d' "$ENV_FILE"
 fi
 PORT="$(sed -n 's/^PORT=//p' "$ENV_FILE" | tail -1)"
 PORT="${PORT:-8000}"

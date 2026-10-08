@@ -372,9 +372,10 @@ empty selections are discarded — `?country=`, `?country=India,,` and
 
 ### An omitted filter does not restrict
 
-Sending no filters returns articles from across the registry, capped by the
-server's `MAX_SOURCES_PER_REQUEST` (default 40 sources). This is the slowest
-possible request — see [§11](#11-performance-and-timeouts).
+Sending no filters searches **every active source** in the registry; with
+filters, every matching source is searched. Nothing is truncated. An unfiltered
+request is the slowest possible one when the cache is cold — see
+[§11](#11-performance-and-timeouts).
 
 ### `source` accepts ids or names
 
@@ -492,8 +493,8 @@ Scraped articles are cached per source for `CACHE_TTL_SECONDS` (default 600 s),
 so the first request for a given source pays the cost and subsequent requests
 are effectively instant until the entry expires.
 
-An unfiltered request fans out to up to 40 sources across 10 threads, which
-would put a cold request in the 60–90 s range. Instead, every request answers
+An unfiltered request fans out to every active source (~365) across 10 threads;
+scraping them all cold takes around 10 minutes. Instead, every request answers
 within **`REQUEST_TIME_BUDGET_SECONDS` (default 25 s)** with the sources that are
 ready, so it fits behind gateways that cut off at 30 s (BluGate does). Sources
 still scraping keep going in the background and are cached for the next request;

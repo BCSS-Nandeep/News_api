@@ -84,7 +84,7 @@ pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Expected: **242 passed**. The suite is fully offline — it uses a fixture
+Expected: **245 passed**. The suite is fully offline — it uses a fixture
 registry and never touches the network, so it is safe to run in CI and on a
 locked-down build host.
 
@@ -99,19 +99,19 @@ All configuration is via environment variables. There is no config file, and
 |---|---|---|---|
 | `PORT` | `8000` | [main.py:14](main.py#L14) | Listen port. **Only honoured when started via `python main.py`** — if you launch `uvicorn` directly, pass `--port`. |
 | `CACHE_TTL_SECONDS` | `600` | [services/cache.py:14](services/cache.py#L14) | How long scraped articles stay fresh. Higher = faster responses, staler news. |
-| `MAX_SOURCES_PER_REQUEST` | `40` | [services/news_service.py:32](services/news_service.py#L32) | Safety cap on sources scraped per request. Directly bounds worst-case latency. |
 | `DISCOVERY_MAX_WORKERS` | `10` | [services/news_service.py:34](services/news_service.py#L34) | Size of the shared thread pool that scrapes sources (all requests share it). |
 | `REQUEST_TIME_BUDGET_SECONDS` | `25` | [services/news_service.py](services/news_service.py) | Max seconds a request waits for scraping. Sources still running finish in the background and are cached; the response's `pending_sources` counts them. Keep it under any gateway timeout in front of the API (BluGate: 30 s). |
 | `CORS_ORIGINS` | *(unset)* | [api/main.py](api/main.py) | Comma-separated browser origins allowed to call the API (e.g. `https://soceye.example.com,http://localhost:3000`), or `*` for any. Unset sends no CORS headers. Server-side callers are unaffected. |
 
 ### Tuning guidance
 
-- **`MAX_SOURCES_PER_REQUEST` is your latency control.** An unfiltered request
-  scrapes up to this many sources. Lower it to tighten the worst case; raise it
-  only if clients always send narrow filters.
+- **Every matching source is searched.** No filters means all active sources
+  (~365); filters narrow the list before anything is scraped. There is no cap —
+  `REQUEST_TIME_BUDGET_SECONDS` bounds how long a request waits, and sources
+  still scraping finish in the background (`pending_sources`).
 - **`DISCOVERY_MAX_WORKERS`** trades latency for outbound connections and CPU.
-  Roughly, cold latency is about
-  `(MAX_SOURCES_PER_REQUEST / DISCOVERY_MAX_WORKERS) × per-source time`.
+  Roughly, a cold scrape of N sources takes
+  `(N / DISCOVERY_MAX_WORKERS) × per-source time` (~15 s per source).
 - **`CACHE_TTL_SECONDS`** at the default 600 s (10 min) is appropriate for news.
   Raising it to 1800 s materially reduces outbound traffic if freshness permits.
 
@@ -120,7 +120,7 @@ container environment:
 
 ```bash
 export CACHE_TTL_SECONDS=900
-export MAX_SOURCES_PER_REQUEST=25
+export DISCOVERY_MAX_WORKERS=12
 ```
 
 ---
@@ -241,7 +241,6 @@ User=blura
 Group=blura
 WorkingDirectory=/opt/blura-engine
 Environment="CACHE_TTL_SECONDS=600"
-Environment="MAX_SOURCES_PER_REQUEST=40"
 Environment="DISCOVERY_MAX_WORKERS=10"
 ExecStart=/opt/blura-engine/.venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
 Restart=always
@@ -275,7 +274,6 @@ COPY . .
 
 ENV PORT=8000 \
     CACHE_TTL_SECONDS=600 \
-    MAX_SOURCES_PER_REQUEST=40 \
     DISCOVERY_MAX_WORKERS=10
 
 EXPOSE 8000
@@ -379,7 +377,7 @@ is a code change.
 | Symptom | Likely cause | Action |
 |---|---|---|
 | All requests return `{"count":0,…}` | No outbound internet access, or DNS blocked. | From the host: `curl -I https://www.thehindu.com`. Check egress rules and proxy environment variables. |
-| First request very slow, later ones instant | Normal — cold cache, then cache hits. | None. Lower `MAX_SOURCES_PER_REQUEST` if the cold path must be faster. |
+| First request very slow, later ones instant | Normal — cold cache, then cache hits. | None. Send country/state/language/source filters to scrape fewer sources. |
 | `504` from the proxy | Proxy read timeout shorter than a cold scrape. | Raise `proxy_read_timeout` to 120 s (§8). |
 | `/news/articles/{id}` returns `404` for an id just received | Cache entry expired, process restarted, or multiple workers are running. | Re-request `/news/articles` to re-warm, then look the id up. Confirm single-worker (§6). |
 | Browser client gets a CORS error | Client's origin not in `CORS_ORIGINS` (§4). | Add it (exact scheme, host and port), then restart. |
@@ -393,7 +391,7 @@ is a code change.
 ## 12. Pre-deployment checklist
 
 - [ ] Python 3.11+ present; virtualenv created and `requirements.txt` installed
-- [ ] `python -m pytest -q` → **242 passed**
+- [ ] `python -m pytest -q` → **245 passed**
 - [ ] Outbound HTTPS and DNS verified **from the deployment host**
 - [ ] Environment variables set, or defaults accepted deliberately
 - [ ] Started with a **single** worker (§6)

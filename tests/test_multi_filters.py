@@ -228,11 +228,58 @@ class TestServiceCandidateSelection:
         news_service.get_articles(source='test_us_english,test_global_agency')
         assert sorted(scraped) == ['test_global_agency', 'test_us_english']
 
-    def test_unfiltered_request_still_honours_the_safety_limit(self, fixture_registry, monkeypatch):
+    def test_unfiltered_request_scrapes_every_active_source(self, fixture_registry, monkeypatch):
         scraped = install_fake_scraper(monkeypatch)
-        monkeypatch.setattr(news_service, '_MAX_SOURCES_PER_REQUEST', 2)
-        news_service.get_articles()
-        assert len(scraped) == 2
+        result = news_service.get_articles(limit=50)
+        active = {s.id for s in fixture_registry.list_active_sources()}
+        assert sorted(scraped) == sorted(active)
+        assert source_ids(result) == active
+        assert 'test_inactive' not in scraped
+
+
+def _many_sources(count, **fields):
+    return [{
+        'id': f'bulk_{i:03d}', 'name': f'Bulk Source {i}', 'region': 'Test',
+        'country': 'India', 'state': 'Odisha' if i % 2 else 'Kerala',
+        'language': 'Odia' if i % 2 else 'Malayalam', 'type': 'newspaper',
+        'base_url': f'https://bulk-{i}.test/', 'active': True, **fields,
+    } for i in range(count)]
+
+
+class TestNoSourceTruncation:
+    """There used to be a 40-source cap, so a search silently skipped every
+    source past the 40th registry entry (all of Odisha, every national paper)."""
+
+    @pytest.fixture
+    def large_registry(self, tmp_path, monkeypatch):
+        from tests.conftest import _write_registry
+        registry = _write_registry(tmp_path, monkeypatch, _many_sources(120) + [{
+            **_many_sources(1)[0], 'id': 'bulk_inactive', 'active': False,
+        }])
+        yield registry
+        registry.reload_registry()
+
+    def test_no_filters_scrapes_all_active_sources(self, large_registry, monkeypatch):
+        scraped = install_fake_scraper(monkeypatch)
+        result = news_service.get_articles(limit=200)
+        assert len(scraped) == 120
+        assert 'bulk_inactive' not in scraped
+        assert result['count'] == 120
+
+    def test_filtered_request_scrapes_every_matching_source(self, large_registry, monkeypatch):
+        scraped = install_fake_scraper(monkeypatch)
+        result = news_service.get_articles(state='Odisha', limit=200)
+        assert len(scraped) == 60
+        assert all(int(sid.split('_')[1]) % 2 for sid in scraped)
+        assert result['count'] == 60
+
+    def test_keyword_search_covers_sources_past_the_old_cap(self, large_registry, monkeypatch):
+        scraped = install_fake_scraper(monkeypatch, extra_by_source={
+            'bulk_119': {'title': 'CJP Odisha protest in Bhubaneswar'},
+        })
+        result = news_service.get_articles(keyword='CJP Odisha')
+        assert len(scraped) == 120
+        assert [a['source_id'] for a in result['articles']] == ['bulk_119']
 
 
 class TestServiceArticleFiltering:

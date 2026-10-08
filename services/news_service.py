@@ -30,7 +30,6 @@ from processing.location import resolve_location
 from processing.keywords import match_keyword, parse_keyword
 from services import cache
 
-_MAX_SOURCES_PER_REQUEST = int(os.getenv('MAX_SOURCES_PER_REQUEST', '40'))
 _MAX_WORKERS = int(os.getenv('DISCOVERY_MAX_WORKERS', '10'))
 # A cold source takes ~15 s to scrape, so a cold request can run 60-90 s — but
 # gateways in front of this API (BluGate) cut requests off at 30 s. Answering
@@ -155,14 +154,14 @@ def _select_sources(
 ) -> List[Source]:
     """Narrow the registry to the sources a request could possibly match
     BEFORE any scraping happens — that is what keeps `country=Japan` from
-    fetching 300+ irrelevant sources. An unfiltered request still falls back
-    to the _MAX_SOURCES_PER_REQUEST safety limit."""
-    candidates = list_active_sources(
+    fetching 300+ irrelevant sources. No filter means every active source,
+    and a filtered list is never truncated: a cap here would silently drop
+    whole regions (the first 40 registry entries are all South Indian). The
+    shared pool (DISCOVERY_MAX_WORKERS), per-source limits in discovery and
+    the request time budget are what keep fetching all of them bounded."""
+    return list_active_sources(
         country=country, state=state, language=language, source_id=source,
     )
-    if len(candidates) > _MAX_SOURCES_PER_REQUEST:
-        candidates = candidates[:_MAX_SOURCES_PER_REQUEST]
-    return candidates
 
 
 def _forget_inflight(source_id: str, future: Future) -> None:
