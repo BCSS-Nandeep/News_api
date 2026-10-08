@@ -11,11 +11,13 @@
 # Port 8000 taken by something else? Choose the port on first install with:
 #   sudo env PORT=8010 bash setup.sh
 #
-# Settings live in /etc/blura-news-api.env (created on first run, never
-# overwritten). After editing it: sudo systemctl restart blura-news-api
+# Settings live in /etc/blura-news-api.env (created on first run; later runs
+# only migrate settings from older versions). After editing it:
+#   sudo systemctl restart blura-news-api
 #
 # Overridable for testing or a different checkout:
-#   REPO_URL, BRANCH, APP_DIR, APP_USER, PORT (PORT only applies on first install)
+#   REPO_URL, BRANCH, APP_DIR, APP_USER, PORT (PORT only applies on first install),
+#   CPU_QUOTA (default 400% = at most 4 cores), MEMORY_MAX (default 6G)
 
 set -euo pipefail
 
@@ -24,6 +26,8 @@ BRANCH="${BRANCH:-international}"
 APP_DIR="${APP_DIR:-/opt/blura-engine}"
 APP_USER="${APP_USER:-blura}"
 PORT="${PORT:-8000}"
+CPU_QUOTA="${CPU_QUOTA:-400%}"
+MEMORY_MAX="${MEMORY_MAX:-6G}"
 SERVICE=blura-news-api
 ENV_FILE=/etc/${SERVICE}.env
 UNIT_FILE=/etc/systemd/system/${SERVICE}.service
@@ -100,19 +104,37 @@ PORT=${PORT}
 CORS_ORIGINS=*
 
 # Seconds scraped articles stay cached before being re-scraped.
-CACHE_TTL_SECONDS=600
-# Sources scraped in parallel.
-DISCOVERY_MAX_WORKERS=10
+CACHE_TTL_SECONDS=1800
 # Max seconds a request waits for scraping; slower sources finish in the
 # background. Keep it under the gateway timeout in front of the API (BluGate: 30).
 REQUEST_TIME_BUDGET_SECONDS=25
+# Worker processes that scrape sources (each uses up to one CPU core; the
+# service as a whole is capped at ${CPU_QUOTA} CPU).
+SCRAPE_PROCESSES=4
+# Sources each worker process scrapes at the same time.
+SCRAPE_THREADS_PER_PROCESS=6
+# Newest articles taken from each source.
+MAX_ITEMS_PER_SOURCE=50
+# Re-scrape every active source in the background this often (0 = off).
+BACKGROUND_REFRESH_SECONDS=600
 EOF
   chmod 644 "$ENV_FILE"
 else
   echo "Keeping existing settings in $ENV_FILE"
-  # MAX_SOURCES_PER_REQUEST no longer exists (every matching source is searched);
-  # drop it so the file doesn't suggest a cap that isn't applied.
+  # Migrate settings written by older versions of this script. Values still at
+  # an old default move to the new one; anything changed by hand is kept.
+  # MAX_SOURCES_PER_REQUEST and DISCOVERY_MAX_WORKERS no longer exist (every
+  # matching source is searched, by SCRAPE_PROCESSES x SCRAPE_THREADS_PER_PROCESS).
   sed -i '/^# Max news sources scraped for one request/d; /^MAX_SOURCES_PER_REQUEST=/d' "$ENV_FILE"
+  sed -i '/^# Sources scraped in parallel\.$/d; /^DISCOVERY_MAX_WORKERS=/d' "$ENV_FILE"
+  sed -i 's/^CACHE_TTL_SECONDS=600$/CACHE_TTL_SECONDS=1800/' "$ENV_FILE"
+  add_setting() {  # name value comment
+    grep -q "^$1=" "$ENV_FILE" || printf '%s\n%s=%s\n' "$3" "$1" "$2" >> "$ENV_FILE"
+  }
+  add_setting SCRAPE_PROCESSES 4 '# Worker processes that scrape sources (each uses up to one CPU core).'
+  add_setting SCRAPE_THREADS_PER_PROCESS 6 '# Sources each worker process scrapes at the same time.'
+  add_setting MAX_ITEMS_PER_SOURCE 50 '# Newest articles taken from each source.'
+  add_setting BACKGROUND_REFRESH_SECONDS 600 '# Re-scrape every active source in the background this often (0 = off).'
 fi
 PORT="$(sed -n 's/^PORT=//p' "$ENV_FILE" | tail -1)"
 PORT="${PORT:-8000}"
@@ -124,8 +146,10 @@ if ! systemctl is-active -q "$SERVICE" && command -v ss >/dev/null 2>&1 \
 fi
 
 step "Installing systemd service $SERVICE"
-# Single process on purpose: the article cache is in-memory and per-process
-# (see DEPLOYMENT.md section 6), so no --workers.
+# One API process on purpose: the article cache is in-memory and per-process
+# (see DEPLOYMENT.md section 6), so no --workers. Scraping runs in its own worker
+# processes (SCRAPE_PROCESSES); CPUQuota/MemoryMax cap the service as a whole so
+# it can never starve the other services on this server.
 cat > "$UNIT_FILE" <<EOF
 [Unit]
 Description=Blura News API
@@ -142,6 +166,8 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=${APP_DIR}/.venv/bin/python main.py
 Restart=always
 RestartSec=5
+CPUQuota=${CPU_QUOTA}
+MemoryMax=${MEMORY_MAX}
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

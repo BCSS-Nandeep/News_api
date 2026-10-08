@@ -22,6 +22,7 @@ nothing" — never raised — so one dead source can't break the fallback chain
 or the caller's request.
 """
 
+import os
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -36,7 +37,9 @@ from scraper.extraction import HEADERS, is_article_url, extract_image, extract_s
 from scraper.sources_registry import Source
 
 _TIMEOUT = 6
-_MAX_ITEMS_PER_SOURCE = 25
+# Newest items taken per source. Each becomes one article-page fetch, so this
+# roughly sets how long a source takes to scrape.
+_MAX_ITEMS_PER_SOURCE = int(os.getenv('MAX_ITEMS_PER_SOURCE', '50'))
 _COMMON_FEED_PATHS = ('/feed/', '/feed', '/rss.xml')
 # Wall-clock budget for one source's whole discover_source() call — a source
 # with a dead homepage could otherwise burn 4 strategies x several requests

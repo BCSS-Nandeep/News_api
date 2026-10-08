@@ -378,8 +378,8 @@ class TestServiceArticleFiltering:
         install_fake_scraper(monkeypatch)
         result = news_service.get_articles(country='United States', language='Telugu')
         assert result == {
-            'count': 0, 'limit': 20, 'offset': 0, 'articles': [], 'pending_sources': 0, 'query_terms': [],
-            'query_phrases': [],
+            'count': 0, 'limit': 20, 'offset': 0, 'articles': [], 'pending_sources': 0,
+            'sources_searched': 0, 'sources_failed': 0, 'query_terms': [], 'query_phrases': [],
         }
 
     def test_keyword_combines_with_country(self, fixture_registry, monkeypatch):

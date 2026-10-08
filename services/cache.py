@@ -1,9 +1,9 @@
 """
 Process-wide, in-memory TTL cache of scraped articles, keyed by source id.
 
-Nothing is persisted, so a restart starts cold and articles are re-discovered
-lazily on the next request that needs that source. This is what stops every
-request from re-scraping sources it already fetched moments ago.
+Nothing is persisted, so a restart starts cold until the background refresh
+(services/news_service.py) has scraped every source again. Only the API process
+writes here — scrape worker processes hand their results back to it.
 """
 
 import os
@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
-_TTL_SECONDS = int(os.getenv('CACHE_TTL_SECONDS', '600'))
+_TTL_SECONDS = int(os.getenv('CACHE_TTL_SECONDS', '1800'))
 
 _lock = threading.Lock()
 _store: Dict[str, Dict] = {}  # source_id -> {'articles': [...], 'fetched_at': float}
@@ -21,6 +21,13 @@ def is_fresh(source_id: str) -> bool:
     with _lock:
         entry = _store.get(source_id)
     return bool(entry and (time.time() - entry['fetched_at']) < _TTL_SECONDS)
+
+
+def age(source_id: str) -> Optional[float]:
+    """Seconds since the source was last cached, or None if it never was."""
+    with _lock:
+        entry = _store.get(source_id)
+    return time.time() - entry['fetched_at'] if entry else None
 
 
 def get(source_id: str) -> Optional[List[dict]]:

@@ -10,9 +10,12 @@ filter are ORed, different filters are ANDed. Registry-backed filters
 so a request for `country=Japan` never touches the Indian sources.
 """
 
+import logging
 import os
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed, wait
+import time
+from concurrent.futures import Future, wait
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -23,28 +26,39 @@ from scraper.sources_registry import (
     FilterValue,
     Source,
     list_active_sources,
-    list_all_sources,
     parse_multi,
 )
 from processing.location import resolve_location
 from processing.keywords import KeywordMatch, SearchText, match_search_text, parse_keyword, search_text
 from services import cache
+from services.scrape_pool import JobTimeout, ScrapePool
 
-_MAX_WORKERS = int(os.getenv('DISCOVERY_MAX_WORKERS', '10'))
-# A cold source takes ~15 s to scrape, so a cold request can run 60-90 s — but
-# gateways in front of this API (BluGate) cut requests off at 30 s. Answering
-# within this budget with the sources that are ready beats a timeout with none.
+log = logging.getLogger('blura.news')
+
+# Scraping parallelism. Parsing pages is CPU work and one Python process uses
+# one core, so sources are scraped in SCRAPE_PROCESSES worker processes, each
+# running SCRAPE_THREADS_PER_PROCESS sources at a time. 0 processes = threads in
+# this process (tests, local runs). Workers run at SCRAPE_NICE so the server's
+# other services get the CPU first.
+_PROCESSES = int(os.getenv('SCRAPE_PROCESSES', '4'))
+_THREADS_PER_PROCESS = int(os.getenv('SCRAPE_THREADS_PER_PROCESS', '6'))
+_SCRAPE_NICE = int(os.getenv('SCRAPE_NICE', '10'))
+# Hard stop for one source's scrape; it then counts as failed and is retried later.
+_SOURCE_TIMEOUT_SECONDS = float(os.getenv('SOURCE_TIMEOUT_SECONDS', '600'))
+# Every active source is re-scraped in the background this often (0 = off), so
+# requests are answered from cache instead of waiting for scrapes.
+_REFRESH_SECONDS = float(os.getenv('BACKGROUND_REFRESH_SECONDS', '600'))
+# A cold source takes ~15 s to scrape — but gateways in front of this API
+# (BluGate) cut requests off at 30 s. Answering within this budget with the
+# sources that are ready beats a timeout with none.
 _TIME_BUDGET_SECONDS = float(os.getenv('REQUEST_TIME_BUDGET_SECONDS', '25'))
 
-# Long-lived, shared by every request: a source still scraping when a request's
-# budget runs out keeps going here and lands in the cache for the next request,
-# instead of being thrown away with a per-request pool.
-_pool = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix='scrape')
-# source_id -> its running scrape. RLock: add_done_callback runs the callback
-# immediately (in the submitting thread, still holding the lock) if the future
-# has already finished.
-_inflight_lock = threading.RLock()
-_inflight: Dict[str, Future] = {}
+# Requests overtake background refreshes in the scrape queue.
+_PRIORITY_REQUEST = 0
+_PRIORITY_REFRESH = 1
+
+_pool: Optional[ScrapePool] = None
+_pool_lock = threading.Lock()
 
 # Sort fallback for an article with no usable timestamp — sorts last.
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -185,38 +199,56 @@ def _select_sources(
     fetching 300+ irrelevant sources. No filter means every active source,
     and a filtered list is never truncated: a cap here would silently drop
     whole regions (the first 40 registry entries are all South Indian). The
-    shared pool (DISCOVERY_MAX_WORKERS), per-source limits in discovery and
-    the request time budget are what keep fetching all of them bounded."""
+    scrape pool's fixed size, per-source limits in discovery and the request
+    time budget are what keep fetching all of them bounded."""
     return list_active_sources(
         country=country, state=state, language=language, source_id=source,
     )
 
 
-def _forget_inflight(source_id: str, future: Future) -> None:
-    with _inflight_lock:
-        if _inflight.get(source_id) is future:
-            del _inflight[source_id]
+def _get_pool() -> ScrapePool:
+    """Created on first use. Results are cached in this process by on_done, so
+    worker processes never touch shared state."""
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ScrapePool(
+                _scrape_prepared,
+                processes=_PROCESSES,
+                threads_per_process=_THREADS_PER_PROCESS,
+                job_timeout=_SOURCE_TIMEOUT_SECONDS,
+                on_done=cache.set,
+                nice=_SCRAPE_NICE,
+            )
+        return _pool
 
 
-def _scrape_in_background(source: Source) -> Future:
-    """At most one scrape per source at a time: a request arriving while an
-    earlier (timed-out) request is still scraping the same source waits on that
-    scrape rather than starting a second one."""
-    with _inflight_lock:
-        future = _inflight.get(source.id)
-        if future is None:
-            future = _pool.submit(cache.get_or_fetch, source.id, lambda s=source: _scrape_prepared(s))
-            _inflight[source.id] = future
-            future.add_done_callback(lambda f, sid=source.id: _forget_inflight(sid, f))
-        return future
+def _scrape_in_background(source: Source, priority: int = _PRIORITY_REQUEST) -> Future:
+    """At most one scrape per source at a time: a request arriving while that
+    source is already queued or scraping (for a request or the background
+    refresh) waits on that scrape rather than starting a second one."""
+    return _get_pool().submit(source.id, source, priority)
 
 
-def _fetch_sources(sources: List[Source]) -> Tuple[List[Dict], int]:
+@dataclass
+class _FetchStats:
+    eligible: int
+    cached: int = 0      # served from fresh cache
+    scraped: int = 0     # not fresh, so scraped (or joined a running scrape)
+    failed: int = 0      # scrape raised or timed out
+    pending: int = 0     # still scraping when the time budget ran out
+    articles: int = 0
+    seconds: float = 0.0
+
+
+def _fetch_sources(sources: List[Source]) -> Tuple[List[Dict], _FetchStats]:
     """Articles for each source — cached ones immediately, the rest scraped
-    concurrently for up to _TIME_BUDGET_SECONDS. Returns (articles, pending),
-    where pending counts sources still scraping when the budget ran out; they
-    finish in the background and are served from cache next time. A single
-    source raising never fails the request — it just contributes nothing."""
+    concurrently for up to _TIME_BUDGET_SECONDS. Sources still scraping when
+    the budget runs out finish in the background and are served from cache
+    next time (stats.pending). A single source raising never fails the
+    request — it just contributes nothing (stats.failed)."""
+    started = time.monotonic()
+    stats = _FetchStats(eligible=len(sources))
     all_articles: List[Dict] = []
     futures: List[Future] = []
     for s in sources:
@@ -224,20 +256,23 @@ def _fetch_sources(sources: List[Source]) -> Tuple[List[Dict], int]:
         # queues behind other requests' slow scrapes.
         cached = cache.get(s.id) if cache.is_fresh(s.id) else None
         if cached is not None:
+            stats.cached += 1
             all_articles.extend(cached)
         else:
             futures.append(_scrape_in_background(s))
 
-    if not futures:
-        return all_articles, 0
-
-    done, pending = wait(futures, timeout=_TIME_BUDGET_SECONDS)
-    for future in done:
-        try:
-            all_articles.extend(future.result())
-        except Exception:
-            continue
-    return all_articles, len(pending)
+    stats.scraped = len(futures)
+    if futures:
+        done, pending = wait(futures, timeout=_TIME_BUDGET_SECONDS)
+        stats.pending = len(pending)
+        for future in done:
+            try:
+                all_articles.extend(future.result())
+            except Exception:
+                stats.failed += 1
+    stats.articles = len(all_articles)
+    stats.seconds = time.monotonic() - started
+    return all_articles, stats
 
 
 def _any_match(haystack: str, needles: Sequence[str]) -> bool:
@@ -274,7 +309,7 @@ def get_articles(
     selected = _select_sources(
         country=countries, state=states, language=languages, source=sources_wanted,
     )
-    articles, pending_sources = _fetch_sources(selected)
+    articles, stats = _fetch_sources(selected)
     articles = dedupe_by_id(articles)
     query = parse_keyword(keyword)
 
@@ -324,12 +359,20 @@ def get_articles(
 
     total = len(filtered)
     page = filtered[offset: offset + limit]
+    log.info(
+        'articles request: %d eligible of %d active sources | %d from cache, %d scraped '
+        '(%d failed, %d still running) | %d articles, %d matched | %.1fs',
+        stats.eligible, len(list_active_sources()), stats.cached, stats.scraped,
+        stats.failed, stats.pending, len(articles), total, stats.seconds,
+    )
     return {
         'count': total,
         'limit': limit,
         'offset': offset,
         'articles': page,
-        'pending_sources': pending_sources,
+        'pending_sources': stats.pending,
+        'sources_searched': stats.eligible,
+        'sources_failed': stats.failed,
         'query_terms': query.terms,
         'query_phrases': [p.text for p in query.phrases],
     }
@@ -345,20 +388,83 @@ def get_article_by_id(article_id: str) -> Optional[Dict]:
     return None
 
 
+def _refresh(sources: List[Source], label: str, active: int) -> Dict:
+    """Scrape `sources` through the pool (behind any user requests), wait for
+    every one to finish, fail or time out, and log the round."""
+    started = time.monotonic()
+    futures = {s.id: _scrape_in_background(s, _PRIORITY_REFRESH) for s in sources}
+    wait(futures.values())
+    stats = {'active': active, 'attempted': len(futures), 'ok': 0, 'empty': 0,
+             'failed': 0, 'timed_out': 0, 'articles': 0}
+    for future in futures.values():
+        exc = future.exception()
+        if exc is None:
+            stats['ok'] += 1
+            stats['articles'] += len(future.result())
+            stats['empty'] += not future.result()
+        elif isinstance(exc, JobTimeout):
+            stats['timed_out'] += 1
+        else:
+            stats['failed'] += 1
+    stats['seconds'] = round(time.monotonic() - started, 1)
+    log.info(
+        '%s: %d active sources, %d attempted | %d ok (%d with no articles), %d failed, '
+        '%d timed out | %d articles | %.0fs',
+        label, active, stats['attempted'], stats['ok'], stats['empty'], stats['failed'],
+        stats['timed_out'], stats['articles'], stats['seconds'],
+    )
+    return stats
+
+
 def refresh_all_sources() -> int:
-    """Force-refresh every active source's cache. Used by the optional
-    background_worker.py pre-warmer — not required for the API to function."""
-    sources = list_all_sources()
-    sources = [s for s in sources if s.active]
-    total = 0
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        futures = {pool.submit(_scrape_prepared, s): s for s in sources}
-        for future in as_completed(futures):
-            s = futures[future]
-            try:
-                articles = future.result()
-                cache.set(s.id, articles)
-                total += len(articles)
-            except Exception:
-                continue
-    return total
+    """Force-refresh every active source's cache; returns the article count.
+    Used by background_worker.py --once."""
+    sources = list_active_sources()
+    return _refresh(sources, 'full refresh', len(sources))['articles']
+
+
+# ── background refresh ─────────────────────────────────────────────────────────
+
+_refresh_stop = threading.Event()
+_refresh_thread: Optional[threading.Thread] = None
+
+
+def _refresh_round() -> Dict:
+    """One background round: every active source not refreshed within the last
+    interval (never scraped, failed last time, or getting old). Sources a
+    request scraped recently are skipped."""
+    sources = list_active_sources()
+    due_after = max(0.0, _REFRESH_SECONDS - 60)  # slack: a round's sources finish minutes apart
+    due = [s for s in sources if (cache.age(s.id) is None or cache.age(s.id) >= due_after)]
+    return _refresh(due, 'background refresh', len(sources))
+
+
+def _refresh_loop() -> None:
+    while not _refresh_stop.is_set():
+        started = time.monotonic()
+        try:
+            _refresh_round()
+        except Exception:
+            log.exception('background refresh round failed')
+        _refresh_stop.wait(max(5.0, _REFRESH_SECONDS - (time.monotonic() - started)))
+
+
+def start_background_refresh() -> bool:
+    """Keep every active source's articles cached so requests rarely wait.
+    Called on API startup; off when BACKGROUND_REFRESH_SECONDS=0."""
+    global _refresh_thread
+    if _REFRESH_SECONDS <= 0 or (_refresh_thread and _refresh_thread.is_alive()):
+        return False
+    _refresh_stop.clear()
+    _refresh_thread = threading.Thread(target=_refresh_loop, name='news-refresh', daemon=True)
+    _refresh_thread.start()
+    log.info('background refresh every %.0f s; scraping with %s', _REFRESH_SECONDS, _get_pool().mode)
+    return True
+
+
+def stop_background_refresh() -> None:
+    _refresh_stop.set()
+    with _pool_lock:
+        pool = _pool
+    if pool is not None:
+        pool.shutdown()

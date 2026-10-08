@@ -1,6 +1,14 @@
 import json
+import os
 
 import pytest
+
+# Set before the app is imported. Tests swap the scraper for in-process fakes,
+# which worker processes can't see, so scraping runs on threads here; and nothing
+# may scrape in the background while a test runs. tests/test_scrape_pool.py
+# covers process mode directly.
+os.environ['SCRAPE_PROCESSES'] = '0'
+os.environ['BACKGROUND_REFRESH_SECONDS'] = '0'
 
 FIXTURE_SOURCES = [
     {

@@ -23,7 +23,9 @@ DISCOVER  ->  SCRAPE  ->  NORMALIZE  ->  FILTER  ->  RETURN
 There is **no database and no ingestion pipeline to provision**. When a request
 arrives, the service selects matching sources from the registry
 (`News_URLs.json`), scrapes them live, and caches the results in memory for
-`CACHE_TTL_SECONDS`. A restart starts cold; articles are re-discovered lazily.
+`CACHE_TTL_SECONDS`. A background refresh re-scrapes every active source every
+`BACKGROUND_REFRESH_SECONDS`, so requests are normally answered from cache. A
+restart starts cold; the first background round re-fills the cache within minutes.
 
 Two consequences shape the whole deployment, and both are covered in detail below:
 
@@ -84,7 +86,7 @@ pip install -r requirements.txt
 python -m pytest -q
 ```
 
-Expected: **247 passed**. The suite is fully offline — it uses a fixture
+Expected: **271 passed**. The suite is fully offline — it uses a fixture
 registry and never touches the network, so it is safe to run in CI and on a
 locked-down build host.
 
@@ -98,8 +100,13 @@ All configuration is via environment variables. There is no config file, and
 | Variable | Default | Read by | Purpose |
 |---|---|---|---|
 | `PORT` | `8000` | [main.py:14](main.py#L14) | Listen port. **Only honoured when started via `python main.py`** — if you launch `uvicorn` directly, pass `--port`. |
-| `CACHE_TTL_SECONDS` | `600` | [services/cache.py:14](services/cache.py#L14) | How long scraped articles stay fresh. Higher = faster responses, staler news. |
-| `DISCOVERY_MAX_WORKERS` | `10` | [services/news_service.py:34](services/news_service.py#L34) | Size of the shared thread pool that scrapes sources (all requests share it). |
+| `CACHE_TTL_SECONDS` | `1800` | [services/cache.py](services/cache.py) | How long scraped articles stay fresh. Keep it above `BACKGROUND_REFRESH_SECONDS` plus one refresh round, so cached sources never expire between rounds. |
+| `SCRAPE_PROCESSES` | `4` | [services/news_service.py](services/news_service.py) | Worker processes that scrape sources. Parsing pages is CPU work and one Python process uses one core, so this is how many cores scraping can use. `0` = threads inside the API process (tests, local runs). |
+| `SCRAPE_THREADS_PER_PROCESS` | `6` | [services/news_service.py](services/news_service.py) | Sources each worker process scrapes at once (overlaps network waits). Total in flight = processes × threads. |
+| `SCRAPE_NICE` | `10` | [services/news_service.py](services/news_service.py) | CPU priority of the scrape workers (higher = lower priority), so other services on the host get the CPU first. |
+| `MAX_ITEMS_PER_SOURCE` | `50` | [scraper/discovery.py](scraper/discovery.py) | Newest articles taken per source. Each is one page fetch, so this roughly sets how long a source takes. |
+| `SOURCE_TIMEOUT_SECONDS` | `600` | [services/news_service.py](services/news_service.py) | Hard stop for one source's scrape; it then counts as failed and is retried in the next round. |
+| `BACKGROUND_REFRESH_SECONDS` | `600` | [services/news_service.py](services/news_service.py) | Every active source is re-scraped in the background this often, so requests rarely wait. `0` turns it off (sources are then scraped only when requested). |
 | `REQUEST_TIME_BUDGET_SECONDS` | `25` | [services/news_service.py](services/news_service.py) | Max seconds a request waits for scraping. Sources still running finish in the background and are cached; the response's `pending_sources` counts them. Keep it under any gateway timeout in front of the API (BluGate: 30 s). |
 | `CORS_ORIGINS` | *(unset)* | [api/main.py](api/main.py) | Comma-separated browser origins allowed to call the API (e.g. `https://soceye.example.com,http://localhost:3000`), or `*` for any. Unset sends no CORS headers. Server-side callers are unaffected. |
 
@@ -109,18 +116,20 @@ All configuration is via environment variables. There is no config file, and
   (~365); filters narrow the list before anything is scraped. There is no cap —
   `REQUEST_TIME_BUDGET_SECONDS` bounds how long a request waits, and sources
   still scraping finish in the background (`pending_sources`).
-- **`DISCOVERY_MAX_WORKERS`** trades latency for outbound connections and CPU.
-  Roughly, a cold scrape of N sources takes
-  `(N / DISCOVERY_MAX_WORKERS) × per-source time` (~15 s per source).
-- **`CACHE_TTL_SECONDS`** at the default 600 s (10 min) is appropriate for news.
-  Raising it to 1800 s materially reduces outbound traffic if freshness permits.
+- **`SCRAPE_PROCESSES` × `SCRAPE_THREADS_PER_PROCESS`** set how fast a full round
+  of all sources completes. Scraping is CPU-bound per process (one core each), so
+  add processes for speed, up to the cores you can spare; threads only overlap
+  network waits. The installer caps the whole service at `CPU_QUOTA` (default
+  400% = 4 cores) and `MEMORY_MAX` (6G) via systemd.
+- **`BACKGROUND_REFRESH_SECONDS`** (10 min) sets how fresh the news is.
+  `CACHE_TTL_SECONDS` (30 min) must stay above it plus one round's duration.
 
 Set them as you would any environment variable, e.g. in a systemd unit (§7) or a
 container environment:
 
 ```bash
-export CACHE_TTL_SECONDS=900
-export DISCOVERY_MAX_WORKERS=12
+export CACHE_TTL_SECONDS=1800
+export SCRAPE_PROCESSES=4
 ```
 
 ---
@@ -174,9 +183,10 @@ multiple workers:
   articles in *its own* worker's cache, so the same id returns `200` or `404`
   depending on which worker the load balancer picked.
 
-The service is already concurrent *within* one process: scraping runs on a
-`ThreadPoolExecutor` (`DISCOVERY_MAX_WORKERS`) and the workload is
-network-bound, not CPU-bound, so a single Uvicorn worker uses the hardware well.
+Scraping already uses several cores without extra API workers: the single API
+process runs `SCRAPE_PROCESSES` scrape worker processes and keeps every result
+in its own cache. To scrape faster, raise `SCRAPE_PROCESSES` — never the number
+of Uvicorn workers.
 
 **To scale beyond one process**, the cache must first be moved to a shared store
 (Redis or equivalent). That is a code change in `services/cache.py`, not a
@@ -185,18 +195,10 @@ ops one.
 
 ### The background worker has the same constraint
 
-[background_worker.py](background_worker.py) is an **optional** cache
-pre-warmer. Be aware of how it actually behaves:
-
-- Run as its own process (`python background_worker.py`), it warms **its own
-  memory, not the API's**. The API process sees no benefit.
-- It is therefore only useful if it runs **inside** the API process, or once the
-  cache is externalised to a shared store.
-
-The API is fully functional without it — sources are scraped lazily on first
-request. **Recommendation: do not deploy it** in its current form; it would
-consume outbound bandwidth scraping all 365 active sources every 10 minutes with
-no effect on API response times. Use `--once` for manual smoke-testing only:
+The API refreshes its own cache in the background (`BACKGROUND_REFRESH_SECONDS`),
+so [background_worker.py](background_worker.py) is not needed. Run as its own
+process it would warm **its own memory, not the API's** — the API sees no
+benefit. **Do not deploy it.** Use `--once` for manual smoke-testing only:
 
 ```bash
 python background_worker.py --once
@@ -240,11 +242,13 @@ Type=simple
 User=blura
 Group=blura
 WorkingDirectory=/opt/blura-engine
-Environment="CACHE_TTL_SECONDS=600"
-Environment="DISCOVERY_MAX_WORKERS=10"
+Environment="CACHE_TTL_SECONDS=1800"
+Environment="SCRAPE_PROCESSES=4"
 ExecStart=/opt/blura-engine/.venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
+CPUQuota=400%
+MemoryMax=6G
 
 [Install]
 WantedBy=multi-user.target
@@ -273,8 +277,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY . .
 
 ENV PORT=8000 \
-    CACHE_TTL_SECONDS=600 \
-    DISCOVERY_MAX_WORKERS=10
+    CACHE_TTL_SECONDS=1800 \
+    SCRAPE_PROCESSES=4
 
 EXPOSE 8000
 
@@ -300,7 +304,7 @@ Two things matter here: **generous timeouts** and **buffering turned off**.
 
 Cold requests are slow by nature — the service is scraping live websites.
 Measured on this codebase: **~15 s for a single cold source**, **~0.01 s once
-cached**. Scraping a full cold source set would take 60–90 s, but each request
+cached**. A full cold round of all sources takes several minutes, but each request
 stops waiting after `REQUEST_TIME_BUDGET_SECONDS` (25 s) and returns what is
 ready, so responses arrive within ~25 s. Keep proxy timeouts above that.
 
@@ -391,7 +395,7 @@ is a code change.
 ## 12. Pre-deployment checklist
 
 - [ ] Python 3.11+ present; virtualenv created and `requirements.txt` installed
-- [ ] `python -m pytest -q` → **247 passed**
+- [ ] `python -m pytest -q` → **271 passed**
 - [ ] Outbound HTTPS and DNS verified **from the deployment host**
 - [ ] Environment variables set, or defaults accepted deliberately
 - [ ] Started with a **single** worker (§6)
@@ -431,9 +435,9 @@ Blura-Engine/
 │   └── location_data.py      # Location reference data
 ├── static/index.html         # Built-in dashboard, served at GET /
 ├── deploy/setup.sh           # Ubuntu install/update script (section 7)
-├── tests/                    # 242 offline tests
+├── tests/                    # 271 offline tests
 ├── News_URLs.json            # Source registry — 377 entries, 365 active
-├── background_worker.py      # Optional pre-warmer (see section 6 before using)
+├── background_worker.py      # One-off refresh for smoke tests (see section 6)
 └── requirements.txt
 ```
 

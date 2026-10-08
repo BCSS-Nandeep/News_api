@@ -1,10 +1,9 @@
 """
-Optional cache pre-warmer for the News API.
+One-off scrape of every active source, for smoke-testing scraping.
 
-The API works standalone without this — each source is discovered and
-scraped lazily on the first request that needs it, then served from cache
-until it expires (services/cache.py, CACHE_TTL_SECONDS). Running this
-alongside the API just means requests rarely hit a cold cache.
+Not needed in production: the API keeps its own cache warm with a background
+refresh (BACKGROUND_REFRESH_SECONDS). Run as a separate process this fills its
+own memory, not the API's, so the API gains nothing from it (DEPLOYMENT.md §6).
 
 Usage:
     python background_worker.py            # loop forever, refresh every 10 min

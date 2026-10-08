@@ -6,7 +6,9 @@ Blura News API — FastAPI app for SocEye.
 Run with: python main.py   (or: uvicorn api.main:app --reload)
 """
 
+import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List
 
@@ -15,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from api.routes import articles, health, sources
+from services import news_service
 
 _STATIC_DIR = Path(__file__).resolve().parent.parent / 'static'
 _UI_FILE = _STATIC_DIR / 'index.html'
@@ -29,7 +32,31 @@ def _cors_origins() -> List[str]:
     raw = os.getenv('CORS_ORIGINS', '')
     return [origin.strip().rstrip('/') for origin in raw.split(',') if origin.strip()]
 
+def _setup_logging() -> None:
+    """Source-coverage and refresh logs (blura.*) go to stderr — the systemd
+    journal on the server — alongside uvicorn's own lines."""
+    logger = logging.getLogger('blura')
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter('%(levelname)s:     %(name)s - %(message)s'))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+
+_setup_logging()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Keeps every active source cached in the background (BACKGROUND_REFRESH_SECONDS).
+    news_service.start_background_refresh()
+    yield
+    news_service.stop_background_refresh()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title='Blura News API',
     description=(
         'Discovers, scrapes and normalizes Indian and international news articles for SocEye.\n\n'

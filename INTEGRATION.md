@@ -233,13 +233,18 @@ GET /news/articles?country=India&language=English&state=Telangana&limit=10&offse
       "image_url": "https://th-i.thgim.com/public/incoming/6a050d/article71450922.ece/alternates/LANDSCAPE_1200/Singapore-Management-University-Logo.jpg"
     }
   ],
-  "pending_sources": 0
+  "pending_sources": 0,
+  "sources_searched": 365,
+  "sources_failed": 0
 }
 ```
 
-`pending_sources` counts matching sources still being scraped when the response
-was sent (see [§11](#11-performance-and-timeouts)). Repeat the request shortly to
-include them.
+`sources_searched` is how many sources the request covered: every active source
+when no `country` / `state` / `language` / `source` filter is sent, otherwise
+every matching source — none are skipped. `sources_failed` counts those whose
+scrape failed or timed out (they are retried automatically), and
+`pending_sources` those still being scraped when the response was sent (see
+[§11](#11-performance-and-timeouts)). Repeat the request shortly to include them.
 
 ### Envelope fields
 
@@ -249,6 +254,9 @@ include them.
 | `limit` | `integer` | The `limit` that was applied (echoed back). |
 | `offset` | `integer` | The `offset` that was applied (echoed back). |
 | `articles` | `ArticleOut[]` | This page of results, sorted by `published_at` descending. |
+| `pending_sources` | `integer` | Sources still being scraped when the response was sent. |
+| `sources_searched` | `integer` | Sources the request covered — all eligible ones, never truncated. |
+| `sources_failed` | `integer` | Of those, sources whose scrape failed or timed out. |
 
 ### `ArticleOut` field reference
 
@@ -312,7 +320,7 @@ Looks up a single article by the `id` from a previous `/news/articles` response.
 
 > **This endpoint only searches the warm in-memory cache.** No database backs
 > it. An id resolves only while the source that produced it is still cached
-> (`CACHE_TTL_SECONDS`, default 10 minutes) and the API process has not
+> (`CACHE_TTL_SECONDS`, default 30 minutes) and the API process has not
 > restarted.
 >
 > **Practical guidance: do not rely on this endpoint for deep links or
@@ -489,12 +497,14 @@ difference is large. Measured against this codebase:
 | Single source, warm cache | **~0.01 s** |
 | `/health`, `/news/sources` | Milliseconds — never scrape |
 
-Scraped articles are cached per source for `CACHE_TTL_SECONDS` (default 600 s),
-so the first request for a given source pays the cost and subsequent requests
-are effectively instant until the entry expires.
+Scraped articles are cached per source for `CACHE_TTL_SECONDS` (default 30 min),
+and the API re-scrapes every active source in the background every
+`BACKGROUND_REFRESH_SECONDS` (default 10 min), so requests are normally answered
+from cache in about a second — including unfiltered ones, which cover all ~365
+sources.
 
-An unfiltered request fans out to every active source (~365) across 10 threads;
-scraping them all cold takes around 10 minutes. Instead, every request answers
+Right after a restart the cache is cold: the first background round takes a few
+minutes. During that time, and for any source not yet cached, a request answers
 within **`REQUEST_TIME_BUDGET_SECONDS` (default 25 s)** with the sources that are
 ready, so it fits behind gateways that cut off at 30 s (BluGate does). Sources
 still scraping keep going in the background and are cached for the next request;
@@ -507,9 +517,9 @@ the response's **`pending_sources`** says how many there were.
 2. **If `pending_sources` > 0, repeat the same request in a minute** to include
    them — e.g. a "load the rest" button. It costs no re-scrape; it is served
    from cache.
-3. **Always send at least one of `country`, `language`, `state` or `source`.**
-   These narrow the source set *before* scraping. Unfiltered requests are the
-   slow path.
+3. **Send `country`, `language`, `state` or `source` when you only need some
+   sources.** They narrow the source set *before* scraping. Unfiltered requests
+   search every active source; once the cache is warm they are as fast.
 4. **Never block a page render on a cold request.** Show a loading state and
    tell the user this may take up to 30 seconds. Consider a background fetch at
    app startup to warm the cache for your common filter combinations.

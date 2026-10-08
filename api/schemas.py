@@ -51,6 +51,17 @@ class ArticleListResponse(BaseModel):
             'They finish in the background; repeat the request shortly to include them.'
         ),
     )
+    sources_searched: int = Field(
+        0,
+        description=(
+            'Sources this request covered: every active source when no country/state/'
+            'language/source filter is given, otherwise every matching source. None are skipped.'
+        ),
+    )
+    sources_failed: int = Field(
+        0,
+        description="Of those, sources whose scrape failed or timed out; they're retried automatically.",
+    )
     query_terms: List[str] = Field(
         default_factory=list,
         description='Every distinct word across the keywords.',
